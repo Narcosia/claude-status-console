@@ -50,9 +50,11 @@
 // device, and a decorative amber that meant nothing would break the one rule
 // the whole colour scheme rests on.
 //
-// Set to 0 for a plain black centre.
+// Currently 0: the effect is preserved but compiled out. See
+// docs/DISPLAY-PERFORMANCE.md for why, and for what to try before turning it
+// back on. Set to 1 to re-enable.
 #ifndef STARGATE
-#define STARGATE 1
+#define STARGATE 0
 #endif
 
 void uiInit(const Palette &palette, uint16_t ledCount);

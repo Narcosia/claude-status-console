@@ -54,7 +54,7 @@ Tap again to dismiss; it also times out after 15 seconds. Touches are resolved
 by angle from the centre rather than by hit-testing the arc widgets, because
 arc bounding boxes all overlap in the middle and would fight over the press.
 
-### The event horizon
+### The event horizon (built, currently off)
 
 Behind the summary, seven concentric ripples travel outward and nine chevrons
 sit around the inner edge — one locks per active session. With nothing running
@@ -73,7 +73,16 @@ so its invalidation covers the whole centre disc — animating that at 30 fps
 would push a near-full-screen flush over QSPI every frame, competing with WiFi
 and the hook server. An event horizon ripples slowly anyway.
 
-Set `STARGATE` to 0 in `ui.h` for a plain black centre.
+**`STARGATE` is currently `0`** — the effect is built and kept in `ui.cpp`, but
+compiled out. Even with the display path fixed, a full-screen composite is
+~43 ms of LVGL rendering and the gate roughly doubles it, which is more than
+this panel can animate smoothly alongside the session arcs.
+
+The whole investigation is written up in
+[docs/DISPLAY-PERFORMANCE.md](docs/DISPLAY-PERFORMANCE.md): the measurements,
+the two real causes, the optimisation that made no difference at all, and what
+to try before turning it back on. Worth reading before touching the render
+path — the baseline was 11 fps long before any of this was added.
 
 ### Naming sessions
 
