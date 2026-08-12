@@ -418,21 +418,31 @@ static void drawDetail() {
 
   lv_label_set_text(lblDetailName, s.displayName());
   lv_label_set_text(lblDetailPath, s.path[0] ? s.path : "");
-  // Prefer the topic - it is stable and it is what tells two sessions in one
-  // folder apart. Fall back to the latest prompt for a session first seen
-  // mid-flight, which has no first prompt to remember.
-  const char *topic = s.topic[0] ? s.topic : s.prompt;
+  // Identity line. The topic is stable and is what tells two sessions in one
+  // folder apart, so it wins. A session first seen mid-flight has no first
+  // prompt to remember, and then whatever it last said is the better identity
+  // than nothing at all.
+  const char *topic = s.topic[0]   ? s.topic
+                      : s.prompt[0] ? s.prompt
+                                    : s.reply;
   if (topic[0]) {
-    // Quoted so a prompt fragment is not mistaken for a status line.
+    // Quoted so a fragment is not mistaken for a status line.
     lv_label_set_text_fmt(lblDetailTopic, "\"%s\"", topic);
   } else {
     // Nothing yet: say so rather than leaving a hole the eye reads as a bug.
     lv_label_set_text(lblDetailTopic, "no prompt seen yet");
   }
 
+  // Second line adapts to what the state needs answering.
+  //
+  //   running  -> what it moved on to, if anything
+  //   waiting  -> what it just finished, which is the whole question when an
+  //               arc is pulsing at you and you have not read that terminal
   bool running = (st == ST_WORKING || st == ST_BACKGROUND);
   if (running && s.prompt[0] && strcmp(s.prompt, topic) != 0) {
     lv_label_set_text_fmt(lblDetailNow, "now: %s", s.prompt);
+  } else if (!running && s.reply[0] && strcmp(s.reply, topic) != 0) {
+    lv_label_set_text_fmt(lblDetailNow, "said: %s", s.reply);
   } else {
     lv_label_set_text(lblDetailNow, "");
   }

@@ -128,6 +128,7 @@ void Registry::apply(const char *sid, const SessionUpdate &u) {
   setIfGiven(s->project, PROJECT_LEN, u.project);
   setIfGiven(s->path, PATH_LEN, u.path);
   setIfGiven(s->prompt, PROMPT_LEN, u.prompt);
+  setIfGiven(s->reply, PROMPT_LEN, u.reply);
   setIfGiven(s->label, LABEL_LEN, u.label);
 
   // The topic is the session's FIRST prompt and is never overwritten. Several

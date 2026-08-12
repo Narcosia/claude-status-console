@@ -55,6 +55,7 @@ struct Session {
   char path[PATH_LEN];        // full cwd, so same-named directories differ
   char topic[PROMPT_LEN];     // condensed FIRST prompt - stable identity
   char prompt[PROMPT_LEN];    // condensed latest prompt - current activity
+  char reply[PROMPT_LEN];     // condensed last assistant message - what it did
   char label[LABEL_LEN];      // explicit name from ?label= on the hook URL
   SessionState state;
   uint32_t order;    // first-seen sequence, so arcs keep a stable position
@@ -87,6 +88,7 @@ struct SessionUpdate {
   const char *project = nullptr;
   const char *path = nullptr;
   const char *prompt = nullptr;
+  const char *reply = nullptr;
   const char *label = nullptr;
 };
 

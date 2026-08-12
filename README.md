@@ -360,11 +360,12 @@ Hook payloads contain far more than session state — `user_input`,
 the POST body.
 
 **Read and kept:** `session_id`, `hook_event_name`, the notification subtype,
-`cwd` (both the basename and a `~`-collapsed tail of the full path), and **the
-first line of `user_prompt`**. Nothing else.
+`cwd` (both the basename and a `~`-collapsed tail of the full path), and a
+condensed first sentence of **`user_prompt`** and of
+**`last_assistant_message`**. Nothing else.
 
-**Still discarded:** `last_assistant_message`, `message`, `tool_input`,
-`transcript_path`, and everything past the prompt's first line.
+**Still discarded:** `message`, `tool_input`, `tool_result`, `transcript_path`,
+and everything past the first sentence of the two message fields.
 
 That boundary is enforced *during parsing*, not after it. The body is streamed
 off the socket through an ArduinoJson filter that admits only those keys, so
@@ -373,14 +374,20 @@ This is also why the HTTP server is hand-rolled on `WiFiServer` rather than
 using `WebServer`, which buffers the whole body into a `String` before any
 handler sees it.
 
-**On admitting the prompt.** It is the largest deliberate step past what the
-old ring kept, and the reasoning is worth stating plainly: a directory name
-cannot distinguish three sessions in the same repo, and the first line of the
-prompt can. It changes what is *visible on a desk*, not what travels — the
-prompt is in every `UserPromptSubmit` payload already and always was; the
-filter only decided whether to keep it. If the screen is somewhere other
-people sit, drop `user_prompt` from the filter in `server.cpp` and the card
-falls back to the label and path.
+**On admitting the two message fields.** This is the largest deliberate step
+past what the old ring kept, and the reasoning is worth stating plainly.
+
+A directory name cannot distinguish three sessions in the same repo; what each
+was *asked to do* can. And a session sitting in `input` has no recent prompt at
+all — it has a last reply — so without `last_assistant_message` the state you
+look at most often is exactly the one that renders blank.
+
+Both fields change what is *visible on a desk*, not what travels: they are in
+every `UserPromptSubmit` and `Stop` payload already and always were, and the
+filter only decides whether to keep them. **The screen is the exposure here,
+not the network.** If the display sits where other people do, drop
+`user_prompt` and `last_assistant_message` from the filter in `server.cpp` —
+the card falls back to the label and path, and everything else still works.
 
 Two things to be aware of regardless:
 

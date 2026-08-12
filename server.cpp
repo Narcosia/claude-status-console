@@ -435,9 +435,13 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength,
   // allocated. last_assistant_message, message, tool_input and
   // transcript_path all fall on the far side of it.
   //
-  // user_prompt is deliberately on this side: its first line is by far the
-  // best label a session can have, and it already crosses the LAN in every
-  // payload - admitting it changes what is shown on a desk, not what travels.
+  // user_prompt and last_assistant_message are deliberately on this side.
+  // Both already cross the LAN in every payload, so admitting them changes
+  // what is shown on a desk, not what travels.
+  //
+  // last_assistant_message is what a *waiting* session has to say for itself:
+  // it arrives on Stop, which is exactly the event that puts a session into
+  // `input`, so the state you most often look at is never blank.
   JsonDocument filter;
   filter["session_id"] = true;
   filter["hook_event_name"] = true;
@@ -445,6 +449,7 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength,
   filter["stop_reason"] = true;
   filter["cwd"] = true;
   filter["user_prompt"] = true;
+  filter["last_assistant_message"] = true;
 
   BodyReader reader{&client, contentLength, millis() + REQUEST_TIMEOUT_MS};
   JsonDocument doc;
@@ -472,6 +477,8 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength,
   if (!kind) kind = doc["stop_reason"] | (const char *)nullptr;
   const char *cwd = doc["cwd"] | (const char *)nullptr;
   const char *userPrompt = doc["user_prompt"] | (const char *)nullptr;
+  const char *assistantMsg =
+      doc["last_assistant_message"] | (const char *)nullptr;
 
   Classification c = classify(event, kind);
 
@@ -485,6 +492,9 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength,
     char firstLine[PROMPT_LEN];
     condense(userPrompt, firstLine, sizeof(firstLine));
 
+    char replyLine[PROMPT_LEN];
+    condense(assistantMsg, replyLine, sizeof(replyLine));
+
     char label[LABEL_LEN];
     queryParam(query, "label", label, sizeof(label));
 
@@ -496,6 +506,7 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength,
     u.project = project[0] ? project : nullptr;
     u.path = shortPath[0] ? shortPath : nullptr;
     u.prompt = firstLine[0] ? firstLine : nullptr;
+    u.reply = replyLine[0] ? replyLine : nullptr;
     u.label = label[0] ? label : nullptr;
 
     _registry.apply(sid, u);
@@ -555,6 +566,7 @@ void HookServer::sendStatus(WiFiClient &client) {
     o["label"] = s.label;
     o["topic"] = s.topic;
     o["prompt"] = s.prompt;
+    o["reply"] = s.reply;
     o["state"] = stateName(displayState(s));
     o["raw_state"] = stateName(s.state);
     o["pending"] = s.pending;
