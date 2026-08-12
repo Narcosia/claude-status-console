@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "ring.h"
+#include "ui.h"
 
 static const uint32_t REQUEST_TIMEOUT_MS = 5000;
 
@@ -402,6 +403,10 @@ void HookServer::service(WiFiClient &client) {
     respond(client, 200, "ok");
   } else if (strncmp(path, "/events", 7) == 0) {
     sendEvents(client);
+  } else if (isPost && strncmp(path, "/kawoosh", 8) == 0) {
+    // Same task as the UI render, so this is a plain flag write.
+    uiKawoosh();
+    respond(client, 200, "kawoosh");
   } else if (isPost && strncmp(path, "/ringscan", 9) == 0) {
     g_ringOverride = RING_OVERRIDE_SCAN;
     g_ringTestUntil = millis() + 180000;

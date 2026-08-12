@@ -37,6 +37,24 @@
 #define RING_CLOCKWISE 1
 #endif
 
+// Stargate event horizon behind the centre summary: concentric ripples
+// travelling outward, with nine chevrons around the inner edge that lock as
+// sessions appear.
+//
+// It sits BEHIND the text and stays dim on purpose. The centre is where the
+// state is read, and decoration that costs legibility is a bad trade on a
+// device whose entire job is to be readable at a glance.
+//
+// The chevrons take the colour of the most urgent session rather than the
+// canonical Stargate amber: warm means "wants you" everywhere else on this
+// device, and a decorative amber that meant nothing would break the one rule
+// the whole colour scheme rests on.
+//
+// Set to 0 for a plain black centre.
+#ifndef STARGATE
+#define STARGATE 1
+#endif
+
 void uiInit(const Palette &palette, uint16_t ledCount);
 
 // Draw one frame from a session snapshot. `phase` is the same counter the ring
@@ -47,3 +65,8 @@ void uiUpdate(const Session *sessions, size_t n, uint32_t phase,
 // Shown small at the bottom of the screen, so the address the hooks need is
 // readable off the device itself rather than only over serial.
 void uiSetNetwork(const char *text);
+
+// Fire the unstable vortex by hand. Called automatically at boot and whenever
+// a new session appears; exposed so POST /kawoosh can trigger it too, which is
+// the only way to watch it without waiting for a session to start.
+void uiKawoosh();

@@ -54,6 +54,27 @@ Tap again to dismiss; it also times out after 15 seconds. Touches are resolved
 by angle from the centre rather than by hit-testing the arc widgets, because
 arc bounding boxes all overlap in the middle and would fight over the press.
 
+### The event horizon
+
+Behind the summary, seven concentric ripples travel outward and nine chevrons
+sit around the inner edge — one locks per active session. With nothing running
+the gate is dormant: the ripples drop to a faint glow and every chevron stays
+dark, so "idle" still reads as idle at a glance.
+
+Two decisions kept it from costing anything that matters:
+
+**The chevrons take the colour of the most urgent session, not the canonical
+amber.** Warm means "wants you" everywhere else on this device. A decorative
+amber that meant nothing would break the one rule the whole colour scheme
+rests on.
+
+**The gate redraws at a third of the UI rate.** Each ripple is a full circle,
+so its invalidation covers the whole centre disc — animating that at 30 fps
+would push a near-full-screen flush over QSPI every frame, competing with WiFi
+and the hook server. An event horizon ripples slowly anyway.
+
+Set `STARGATE` to 0 in `ui.h` for a plain black centre.
+
 ### Naming sessions
 
 Directory names are often too generic to tell sessions apart — three sessions

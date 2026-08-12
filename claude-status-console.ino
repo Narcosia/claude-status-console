@@ -53,8 +53,15 @@ static volatile uint32_t g_phase = 0;
 
 // --- LVGL glue --------------------------------------------------------------
 
+// Time spent inside flush, accumulated per reporting window. Separating this
+// from the total tells render cost from transfer cost, which are fixed in
+// completely different places.
+static volatile uint32_t g_flushUs = 0;
+static volatile uint32_t g_flushPx = 0;
+
 static void lvglFlush(lv_disp_drv_t *disp, const lv_area_t *area,
                       lv_color_t *pixels) {
+  uint32_t t0 = micros();
   uint32_t w = area->x2 - area->x1 + 1;
   uint32_t h = area->y2 - area->y1 + 1;
 #if (LV_COLOR_16_SWAP != 0)
@@ -62,6 +69,8 @@ static void lvglFlush(lv_disp_drv_t *disp, const lv_area_t *area,
 #else
   gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)&pixels->full, w, h);
 #endif
+  g_flushUs += micros() - t0;
+  g_flushPx += w * h;
   lv_disp_flush_ready(disp);
 }
 
@@ -234,7 +243,11 @@ void setup() {
     attachInterrupt(TP_INT, onTouchIRQ, FALLING);
   }
 
-  if (!gfx->begin()) Serial.println("gfx: begin() failed");
+  // 80 MHz rather than the library's 40 MHz default. At 40 MHz a full 466x466
+  // frame is ~22 ms of bus time alone, which caps a full-screen redraw below
+  // 30 fps before LVGL has rendered anything - and the event horizon redraws
+  // the whole centre disc every frame. The CO5300 is specified well past this.
+  if (!gfx->begin(80000000)) Serial.println("gfx: begin() failed");
   gfx->fillScreen(RGB565_BLACK);
   gfx->setBrightness(SCREEN_BRIGHTNESS);
 
@@ -312,6 +325,30 @@ void loop() {
     uiUpdate(snap, n, g_phase, DONE_LINGER_MS);
   }
 
+  // Frame-time instrumentation. A stuttering animation and an overloaded bus
+  // look identical from the sofa, so measure rather than guess - the same
+  // reason ringTask reports its frame count.
+  uint32_t t0 = micros();
   lv_timer_handler();
+  uint32_t dt = micros() - t0;
+
+  static uint32_t uiFrames = 0, uiSum = 0, uiMax = 0, uiLast = 0;
+  uiFrames++;
+  uiSum += dt;
+  if (dt > uiMax) uiMax = dt;
+  if (now - uiLast >= 5000) {
+    uiLast = now;
+    Serial.printf(
+        "ui: %lu passes/5s, mean %lu us, worst %lu us | flush %lu us "
+        "(%lu%%), %lu kpx\n",
+        (unsigned long)uiFrames,
+        (unsigned long)(uiFrames ? uiSum / uiFrames : 0), (unsigned long)uiMax,
+        (unsigned long)(uiFrames ? g_flushUs / uiFrames : 0),
+        (unsigned long)(uiSum ? (uint64_t)g_flushUs * 100 / uiSum : 0),
+        (unsigned long)(g_flushPx / 1000));
+    uiFrames = uiSum = uiMax = 0;
+    g_flushUs = g_flushPx = 0;
+  }
+
   delay(2);
 }

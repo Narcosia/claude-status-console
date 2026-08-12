@@ -60,6 +60,41 @@ static char g_detailSid[SID_LEN] = {0};
 static bool g_detailOpen = false;
 static uint32_t g_detailUntil = 0;
 
+// --- Stargate centre --------------------------------------------------------
+//
+// Seven concentric ripples and nine chevrons. The ripples are thin outlines
+// rather than filled discs: cheap to redraw, and they do not wash out the text
+// sitting on top of them.
+#if STARGATE
+// Twelve rings rather than a handful: the kawoosh is an expanding front, and a
+// coarse set of radii makes it read as steps rather than a surge.
+// Eight stacked discs: enough for a smooth radial ramp, few enough that the
+// overdraw stays affordable. The outermost is 298 px, which keeps the pool
+// clear of the session band at radius 198 so the arcs are not dragged into
+// every centre redraw.
+static const size_t GATE_RINGS = 6;
+static const size_t CHEVRONS = 9;
+static const lv_coord_t GATE_INNER = 60;     // diameter of the core disc
+static const lv_coord_t GATE_STEP = 46;      // spacing, so the outermost is 290
+static const lv_coord_t CHEVRON_SIZE = 372;  // just inside the session band
+static const lv_opa_t GATE_MIN = 8;
+// Per-disc, and they stack - eight of these composite to a bright core, which
+// is what gives the pool its glow without any one layer being opaque.
+static const lv_opa_t GATE_MAX = 52;
+
+// The unstable vortex: erupts from the centre, flushes outward, retracts, then
+// settles. Timed in one place so the phases below stay legible as fractions.
+static const uint32_t KAWOOSH_MS = 1150;
+
+static lv_obj_t *gateRipple[GATE_RINGS];
+static lv_obj_t *chevron[CHEVRONS];
+
+static uint32_t g_burstStart = 0;
+static bool g_bursting = false;
+static size_t g_prevSessions = 0;
+static bool g_gateSeeded = false;
+#endif
+
 static inline lv_color_t colourOf(SessionState s) {
   RGB c = g_pal->colour[s];
   return lv_color_make(c.r, c.g, c.b);
@@ -74,16 +109,62 @@ static uint16_t ledToDeg(float led) {
   return (uint16_t)(d + 0.5f);
 }
 
+// Every LVGL write below goes through a cache, because the two kinds of change
+// cost wildly different amounts:
+//
+//   angles -> LVGL invalidates only the sector that actually moved: cheap
+//   style  -> LVGL invalidates the object's whole bounding box, and these arcs
+//             are 448x448, so one colour write costs a full-screen redraw
+//
+// Rewriting colour and opacity on every arc every frame - which is what this
+// did originally - meant eight full-screen invalidations per frame whether or
+// not the picture had changed. Measured at 85 ms a pass with four sessions,
+// about 11 fps, before the event horizon was added at all.
+struct ArcCache {
+  bool init;
+  uint16_t start, end;
+  lv_color_t colour;
+  lv_opa_t opa;
+};
+static ArcCache baseCache[MAX_SESSIONS];
+static ArcCache headCache[MAX_SESSIONS];
+
+static void setArcStyle(lv_obj_t *arc, ArcCache &c, lv_color_t colour,
+                        lv_opa_t opa) {
+  if (!c.init || colour.full != c.colour.full) {
+    lv_obj_set_style_arc_color(arc, colour, LV_PART_INDICATOR);
+    c.colour = colour;
+  }
+  if (!c.init || opa != c.opa) {
+    lv_obj_set_style_arc_opa(arc, opa, LV_PART_INDICATOR);
+    c.opa = opa;
+  }
+  c.init = true;
+}
+
 // LVGL always fills an arc clockwise from start to end, so an anticlockwise
 // LED chain needs its endpoints swapped or every arc is drawn as its
 // complement - the gap instead of the segment.
-static void setArcSpan(lv_obj_t *arc, float loLed, float hiLed) {
+static void setArcSpan(lv_obj_t *arc, ArcCache &c, float loLed, float hiLed) {
   uint16_t a = ledToDeg(loLed), b = ledToDeg(hiLed);
-  if (RING_CLOCKWISE) {
-    lv_arc_set_angles(arc, a, b);
-  } else {
-    lv_arc_set_angles(arc, b, a);
+  if (!RING_CLOCKWISE) {
+    uint16_t t = a;
+    a = b;
+    b = t;
   }
+  if (!c.init || a != c.start || b != c.end) {
+    lv_arc_set_angles(arc, a, b);
+    c.start = a;
+    c.end = b;
+  }
+}
+
+// Pulse brightness quantised to 16 levels. Invisible as a step on a slow
+// breath, and it collapses a stream of one-unit opacity changes - each of them
+// a full-screen invalidation - into a handful per cycle.
+static inline lv_opa_t quantise(uint16_t v) {
+  if (v > 255) v = 255;
+  return (lv_opa_t)((v / 16) * 16);
 }
 
 static const char *stateWord(SessionState s) {
@@ -126,6 +207,169 @@ static lv_obj_t *makeArc(lv_obj_t *parent) {
   lv_obj_add_flag(a, LV_OBJ_FLAG_HIDDEN);
   return a;
 }
+
+#if STARGATE
+// Ring 0 is the core disc and the last is the rim, so the ramp runs from a
+// hot cyan-white centre out to deep blue - the way the real pool is lit.
+//
+// Kept as plain components rather than reading them back off an lv_color_t:
+// with LV_COLOR_16_SWAP the 16-bit layout splits green across two bitfields,
+// so `.ch.green` does not even exist, and a read-back would lose precision to
+// 5/6-bit quantisation on the way through regardless.
+static void horizonRGB(size_t ring, uint8_t &r, uint8_t &g, uint8_t &b) {
+  float t = GATE_RINGS > 1 ? (float)ring / (float)(GATE_RINGS - 1) : 0.0f;
+  r = (uint8_t)(150 - t * 146);
+  g = (uint8_t)(240 - t * 205);
+  b = (uint8_t)(255 - t * 140);
+}
+
+static lv_color_t horizonColour(size_t ring) {
+  uint8_t r, g, b;
+  horizonRGB(ring, r, g, b);
+  return lv_color_make(r, g, b);
+}
+
+static void buildGate(lv_obj_t *scr) {
+  // Filled circles, not arcs. Two reasons, and they agree for once.
+  //
+  // Visually: the event horizon is a luminous pool, not a set of outlines.
+  // Stacking discs from rim to core gives the radial ramp the real thing has.
+  //
+  // Cost: an lv_arc is drawn through an arc mask over its entire bounding box,
+  // and twelve full-circle arcs measured 160 ms a frame - six frames a second.
+  // A filled circle is a rounded-rect fill, which is far cheaper per pixel.
+  //
+  // Created smallest first, each pushed to the back, so the largest ends up
+  // furthest back and every disc above it stays visible.
+  for (size_t i = 0; i < GATE_RINGS; i++) {
+    lv_coord_t d = GATE_INNER + (lv_coord_t)i * GATE_STEP;
+    lv_obj_t *c = lv_obj_create(scr);
+    lv_obj_set_size(c, d, d);
+    lv_obj_center(c);
+    lv_obj_set_style_radius(c, LV_RADIUS_CIRCLE, 0);
+    lv_obj_set_style_border_width(c, 0, 0);
+    lv_obj_set_style_pad_all(c, 0, 0);
+    lv_obj_set_style_bg_color(c, horizonColour(i), 0);
+    lv_obj_set_style_bg_opa(c, GATE_MIN, 0);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_move_background(c);
+    gateRipple[i] = c;
+  }
+
+  for (size_t k = 0; k < CHEVRONS; k++) {
+    lv_obj_t *c = makeArc(scr);
+    lv_obj_set_size(c, CHEVRON_SIZE, CHEVRON_SIZE);
+    lv_obj_center(c);
+    // Nine markers at 40 degree intervals, starting at 12 o'clock.
+    uint16_t centreDeg = (uint16_t)((270 + k * 40) % 360);
+    lv_arc_set_angles(c, (centreDeg + 356) % 360, (centreDeg + 4) % 360);
+    lv_obj_set_style_arc_width(c, 9, LV_PART_INDICATOR);
+    lv_obj_set_style_arc_rounded(c, true, LV_PART_INDICATOR);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_background(c);
+    chevron[k] = c;
+  }
+}
+
+void uiKawoosh() {
+  g_burstStart = millis();
+  g_bursting = true;
+}
+
+// Where the leading edge of the vortex sits, 0 at the centre and 1 at the rim,
+// as a function of progress through the burst.
+//
+// Shaped after the real effect rather than a plain expansion: it erupts fast
+// and decelerating, flushes outward past the rim, then snaps back and collapses
+// into the plane of the gate, which is where the horizon takes over.
+static float vortexFront(float t) {
+  if (t < 0.34f) return powf(t / 0.34f, 0.55f) * 1.06f;  // erupt
+  if (t < 0.58f) return 1.06f;                            // flush
+  if (t < 0.80f) return 1.06f - (t - 0.58f) / 0.22f * 0.5f;  // retract
+  return 0.56f - (t - 0.80f) / 0.20f * 0.56f;             // collapse
+}
+
+// One frame of the gate. `n` locked chevrons, ripples travelling outward.
+static void drawGate(size_t n, SessionState top, uint32_t phase) {
+  bool open = n > 0;
+
+  uint32_t elapsed = millis() - g_burstStart;
+  if (g_bursting && elapsed >= KAWOOSH_MS) g_bursting = false;
+
+  if (g_bursting) {
+    float t = (float)elapsed / (float)KAWOOSH_MS;
+    float front = vortexFront(t);
+    // Fade the whole thing out over the collapse so it hands over to the
+    // settled horizon rather than simply vanishing.
+    float envelope = t < 0.80f ? 1.0f : 1.0f - (t - 0.80f) / 0.20f;
+
+    for (size_t i = 0; i < GATE_RINGS; i++) {
+      float r = (float)i / (float)(GATE_RINGS - 1);
+      float d = r - front;
+
+      float level;
+      if (d > 0.0f) {
+        // Ahead of the front: nothing, with a sharp leading edge.
+        level = d < 0.10f ? (1.0f - d / 0.10f) : 0.0f;
+      } else {
+        // Behind it: the trailing column, fading toward the centre.
+        level = 0.85f + d * 0.55f;
+        if (level < 0.0f) level = 0.0f;
+      }
+      level *= envelope;
+
+      // Scaled against GATE_MAX rather than full opacity: eight discs stack,
+      // so per-layer values this side of opaque still composite to a bright
+      // core - and an opaque core would swallow the text sitting on it.
+      uint16_t opa = (uint16_t)(level * 200.0f);
+      if (opa > 200) opa = 200;
+      lv_obj_set_style_bg_opa(gateRipple[i], (lv_opa_t)opa, 0);
+
+      // The leading edge runs hot toward white; behind it the pool stays blue.
+      float heat = 1.0f - fabsf(d) / 0.28f;
+      if (heat < 0.0f) heat = 0.0f;
+      uint8_t br, bg, bb;
+      horizonRGB(i, br, bg, bb);
+      lv_color_t hot = lv_color_make((uint8_t)(br + heat * (235 - br)),
+                                     (uint8_t)(bg + heat * (250 - bg)), 255);
+      lv_obj_set_style_bg_color(gateRipple[i], hot, 0);
+    }
+  } else {
+    for (size_t i = 0; i < GATE_RINGS; i++) {
+      // Outer discs lag the inner ones, so the shimmer travels outward rather
+      // than the whole pool breathing at once.
+      uint8_t s = motionSine((uint16_t)((phase / 3 + i * 6) % 64));
+      uint16_t opa = GATE_MIN + (uint16_t)s * (GATE_MAX - GATE_MIN) / 255;
+      // Dormant when nothing is running: an idle gate has no puddle.
+      if (!open) opa = GATE_MIN / 2 + opa / 6;
+      lv_obj_set_style_bg_opa(gateRipple[i], (lv_opa_t)opa, 0);
+      lv_obj_set_style_bg_color(gateRipple[i], horizonColour(i), 0);
+    }
+  }
+
+  // Chevrons only change when the session count or the urgency does, but they
+  // are arcs sized to the full band - restyling all nine every frame meant
+  // nine full-size arc masks per frame for a picture that had not changed.
+  static size_t lastN = SIZE_MAX;
+  static SessionState lastTop = ST_NONE;
+  if (n != lastN || top != lastTop) {
+    lastN = n;
+    lastTop = top;
+    lv_color_t lit = colourOf(top);
+    for (size_t k = 0; k < CHEVRONS; k++) {
+      bool locked = k < n;
+      lv_obj_set_style_arc_color(chevron[k],
+                                 locked ? lit : lv_color_hex(0x23262b),
+                                 LV_PART_INDICATOR);
+      lv_obj_set_style_arc_opa(chevron[k], locked ? LV_OPA_COVER : 90,
+                               LV_PART_INDICATOR);
+    }
+  }
+}
+#else   // STARGATE
+void uiKawoosh() {}  // keeps /kawoosh linking when the gate is compiled out
+#endif  // STARGATE
 
 static void hideDetail() {
   g_detailOpen = false;
@@ -193,6 +437,10 @@ void uiInit(const Palette &palette, uint16_t ledCount) {
     arcBase[i] = makeArc(scr);
     arcHead[i] = makeArc(scr);
   }
+
+#if STARGATE
+  buildGate(scr);
+#endif
 
   lblCount = lv_label_create(scr);
   lv_obj_set_style_text_font(lblCount, &lv_font_montserrat_48, 0);
@@ -302,6 +550,8 @@ static void drawArcs(const Session *sessions, size_t n, uint32_t phase,
     if (i >= g_spanN) {
       lv_obj_add_flag(arcBase[i], LV_OBJ_FLAG_HIDDEN);
       lv_obj_add_flag(arcHead[i], LV_OBJ_FLAG_HIDDEN);
+      baseCache[i].init = false;
+      headCache[i].init = false;
       continue;
     }
 
@@ -316,11 +566,15 @@ static void drawArcs(const Session *sessions, size_t n, uint32_t phase,
       // A lone session owns the whole ring, and there ledToDeg(0) and
       // ledToDeg(ledCount) are the same angle - which would collapse the arc
       // to nothing instead of drawing a full circle.
-      lv_arc_set_angles(arcBase[i], 0, 360);
+      if (!baseCache[i].init || baseCache[i].start != 0 ||
+          baseCache[i].end != 360) {
+        lv_arc_set_angles(arcBase[i], 0, 360);
+        baseCache[i].start = 0;
+        baseCache[i].end = 360;
+      }
     } else {
-      setArcSpan(arcBase[i], lo, hi);
+      setArcSpan(arcBase[i], baseCache[i], lo, hi);
     }
-    lv_obj_set_style_arc_color(arcBase[i], col, LV_PART_INDICATOR);
 
     // Same stagger the ring uses, so neighbours are never in step.
     uint16_t phaseOff = (uint16_t)(i * 64 / g_spanN);
@@ -331,26 +585,33 @@ static void drawArcs(const Session *sessions, size_t n, uint32_t phase,
       uint32_t linger = lingerMs ? lingerMs : 1;
       int32_t fade = 255 - (int32_t)(elapsed * 255 / linger);
       if (fade < 0) fade = 0;
-      lv_obj_set_style_arc_opa(arcBase[i], (lv_opa_t)fade, LV_PART_INDICATOR);
+      setArcStyle(arcBase[i], baseCache[i], col, quantise((uint16_t)fade));
       lv_obj_add_flag(arcHead[i], LV_OBJ_FLAG_HIDDEN);
+      headCache[i].init = false;
       continue;
     }
 
     MotionSpec m = motionFor(st);
     if (m.comet) {
-      lv_obj_set_style_arc_opa(arcBase[i], COMET_BODY, LV_PART_INDICATOR);
+      // The body never changes once set, so after the first frame a comet
+      // costs only its head's angle move - a sector invalidation, not a
+      // full-screen one. This is why comets are nearly free and pulses are not.
+      setArcStyle(arcBase[i], baseCache[i], col, COMET_BODY);
       uint16_t headOff = cometHead(span, phase, cometOff, m.rate);
       // Head plus one LED of tail, so the direction of travel reads.
       float headLed = (float)(lo + headOff);
       lv_obj_clear_flag(arcHead[i], LV_OBJ_FLAG_HIDDEN);
-      setArcSpan(arcHead[i], headLed, headLed + 1.0f);
-      lv_obj_set_style_arc_color(arcHead[i], col, LV_PART_INDICATOR);
-      lv_obj_set_style_arc_opa(arcHead[i], LV_OPA_COVER, LV_PART_INDICATOR);
+      setArcSpan(arcHead[i], headCache[i], headLed, headLed + 1.0f);
+      setArcStyle(arcHead[i], headCache[i], col, LV_OPA_COVER);
     } else {
       uint8_t level = pulseLevel(phase, m.rate, phaseOff);
       if (level < PULSE_FLOOR) level = PULSE_FLOOR;
-      lv_obj_set_style_arc_opa(arcBase[i], level, LV_PART_INDICATOR);
+      // Quantised: a pulse is the one animation that must change a style every
+      // frame, and each change costs a full-bbox invalidation. Rounding to 16
+      // levels cuts that to a few writes per breath with no visible stepping.
+      setArcStyle(arcBase[i], baseCache[i], col, quantise(level));
       lv_obj_add_flag(arcHead[i], LV_OBJ_FLAG_HIDDEN);
+      headCache[i].init = false;
     }
   }
 }
@@ -471,7 +732,63 @@ void uiUpdate(const Session *sessions, size_t n, uint32_t phase,
   memcpy(g_shown, sessions, n * sizeof(Session));
   g_shownN = n;
 
-  drawArcs(sessions, n, phase, lingerMs);
-  drawCentre(sessions, n);
-  drawDetail();
+  // Frame budget, measured on this hardware: a full-screen pass costs ~59 ms
+  // without the gate and ~170 ms with it, of which only 27% is the SPI
+  // transfer - the rest is LVGL compositing. Two pulsing arcs alone invalidate
+  // their whole 448x448 bounding boxes, LVGL merges those into one area, and
+  // every frame ends up redrawing all 217k pixels.
+  //
+  // Asking for 30 fps against a 59 ms frame is what produced the lurching:
+  // calls arrive faster than they complete, so the visible cadence is whatever
+  // is left over. Dividing the work down to a rate the panel can actually hold
+  // trades frame rate for an even one, which is the thing the eye notices.
+  static uint8_t tick = 0;
+  tick++;
+
+#if STARGATE
+  bool bursting = g_bursting;
+#else
+  bool bursting = false;
+#endif
+
+  // A burst freezes the arcs for its ~1.1 s. Nothing about a comet's position
+  // is worth defending against a wormhole opening, and skipping them shrinks
+  // the invalidated area to the gate alone - which is what buys the surge
+  // enough frames to read as a surge.
+  if (!bursting && (tick % 3) == 0) {
+    drawArcs(sessions, n, phase, lingerMs);
+    drawCentre(sessions, n);
+  }
+
+#if STARGATE
+  // A new session dials the gate. Giving the kawoosh a cause rather than a
+  // timer is what stops it being a screensaver: it fires when something
+  // actually happened, and the rest of the time the horizon just ripples.
+  if (!g_gateSeeded) {
+    g_gateSeeded = true;
+    uiKawoosh();  // and once at boot, because a gate should announce itself
+  } else if (n > g_prevSessions) {
+    uiKawoosh();
+  }
+  g_prevSessions = n;
+
+  // At rest the shimmer is slow enough to run at a sixth of the loop rate.
+  // During a burst it gets every pass, and with the arcs frozen it is the only
+  // thing redrawing.
+  // Offset from the arc tick, not aligned to it. Both on the same tick meant
+  // every sixth frame did all the work at once - measured at 138 ms, which is
+  // long enough to see as a hitch. Interleaved, each heavy frame does half.
+  if (bursting || (tick % 6) == 3) {
+    SessionState top = ST_WORKING;
+    for (size_t i = 0; i < n; i++) {
+      SessionState st = displayState(sessions[i]);
+      if (urgency(st) > urgency(top)) top = st;
+    }
+    drawGate(n, top, phase);
+  }
+#endif
+
+  // The detail card rewrites five labels; no point doing that faster than the
+  // arcs, and nobody reads a card at 30 fps.
+  if (!bursting && (tick % 3) == 0) drawDetail();
 }
