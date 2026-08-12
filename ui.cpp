@@ -77,10 +77,19 @@ static const size_t CHEVRONS = 9;
 static const lv_coord_t GATE_INNER = 60;     // diameter of the core disc
 static const lv_coord_t GATE_STEP = 46;      // spacing, so the outermost is 290
 static const lv_coord_t CHEVRON_SIZE = 372;  // just inside the session band
-static const lv_opa_t GATE_MIN = 8;
-// Per-disc, and they stack - eight of these composite to a bright core, which
-// is what gives the pool its glow without any one layer being opaque.
-static const lv_opa_t GATE_MAX = 52;
+// Per-disc, and they stack. At ~100 each over black, six overlapping layers
+// composite to a nearly solid core and a single layer at the rim - which is
+// the filled pool with a hot centre, rather than the faint outlines this
+// started as. The shimmer rides between MIN and MAX.
+static const lv_opa_t GATE_MIN = 74;
+static const lv_opa_t GATE_MAX = 132;
+
+// Chevron orange, straight off the prop. This is decoration and not status -
+// everywhere else on this device warm means "wants you", and that meaning now
+// lives entirely on the arcs and the ring, which is where it is most visible
+// anyway. The centre count keeps its urgency colour when the gate is dormant.
+static const uint32_t CHEVRON_LIT = 0xFF6A18;
+static const uint32_t CHEVRON_DARK = 0x241a12;
 
 // The unstable vortex: erupts from the centre, flushes outward, retracts, then
 // settles. Timed in one place so the phases below stay legible as fractions.
@@ -356,13 +365,13 @@ static void drawGate(size_t n, SessionState top, uint32_t phase) {
   if (n != lastN || top != lastTop) {
     lastN = n;
     lastTop = top;
-    lv_color_t lit = colourOf(top);
+    (void)top;
     for (size_t k = 0; k < CHEVRONS; k++) {
       bool locked = k < n;
-      lv_obj_set_style_arc_color(chevron[k],
-                                 locked ? lit : lv_color_hex(0x23262b),
-                                 LV_PART_INDICATOR);
-      lv_obj_set_style_arc_opa(chevron[k], locked ? LV_OPA_COVER : 90,
+      lv_obj_set_style_arc_color(
+          chevron[k], lv_color_hex(locked ? CHEVRON_LIT : CHEVRON_DARK),
+          LV_PART_INDICATOR);
+      lv_obj_set_style_arc_opa(chevron[k], locked ? LV_OPA_COVER : 120,
                                LV_PART_INDICATOR);
     }
   }
@@ -618,8 +627,10 @@ static void drawArcs(const Session *sessions, size_t n, uint32_t phase,
 
 static void drawCentre(const Session *sessions, size_t n) {
   if (n == 0) {
+    // Dormant gate: no pool to read against, so the pale scheme applies.
     lv_label_set_text(lblCount, "-");
     lv_obj_set_style_text_color(lblCount, lv_color_hex(0x3c4043), 0);
+    lv_obj_set_style_text_color(lblWord, lv_color_hex(0x9aa0a6), 0);
     lv_label_set_text(lblWord, "IDLE");
     lv_label_set_text(lblBreak, "");
     return;
@@ -634,9 +645,22 @@ static void drawCentre(const Session *sessions, size_t n) {
   }
 
   lv_label_set_text_fmt(lblCount, "%u", (unsigned)n);
-  // The headline number takes the colour of the most urgent session, so the
-  // centre answers "does anything want me?" before any text is read.
-  lv_obj_set_style_text_color(lblCount, colourOf(top), 0);
+
+  // With the event horizon lit, the centre is a bright cyan pool and pale text
+  // disappears into it - so the summary is drawn as dark ink on the horizon
+  // instead. The cost is that the headline number no longer carries the
+  // urgency colour; that signal still has the arcs and the whole LED ring,
+  // which are the louder channels anyway. With STARGATE off, or an idle gate,
+  // the old colouring returns.
+#if STARGATE
+  bool onPool = true;
+#else
+  bool onPool = false;
+#endif
+  lv_obj_set_style_text_color(
+      lblCount, onPool ? lv_color_hex(0x03151f) : colourOf(top), 0);
+  lv_obj_set_style_text_color(
+      lblWord, lv_color_hex(onPool ? 0x0a3245 : 0x9aa0a6), 0);
   lv_label_set_text(lblWord, n == 1 ? "AGENT" : "AGENTS");
 
   // Most urgent first: what is blocked matters more than what is busy.
@@ -655,7 +679,8 @@ static void drawCentre(const Session *sessions, size_t n) {
     if (strlen(buf) + strlen(part) < sizeof(buf)) strcat(buf, part);
   }
   lv_label_set_text(lblBreak, buf);
-  lv_obj_set_style_text_color(lblBreak, lv_color_hex(0xc8ccd0), 0);
+  lv_obj_set_style_text_color(
+      lblBreak, lv_color_hex(onPool ? 0x072634 : 0xc8ccd0), 0);
 }
 
 static void drawDetail() {

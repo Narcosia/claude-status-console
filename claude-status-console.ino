@@ -23,6 +23,19 @@
 #include "server.h"
 #include "ui.h"
 
+// Periodic Serial output is not free on this board. There is no UART bridge,
+// so Serial is USB CDC, and a write blocks until the host drains it - or until
+// its timeout expires when nothing is listening. A print every five seconds
+// therefore shows up as the display running smoothly for a few seconds, then
+// pausing, then running again.
+//
+// That is a trap worth naming: the instrumentation added to find a stutter was
+// itself producing one. Both profiling prints are off by default; turn them on
+// only while attached to a serial monitor that is actually reading.
+#ifndef UI_PROFILE
+#define UI_PROFILE 0
+#endif
+
 // --- display ----------------------------------------------------------------
 
 static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
@@ -152,12 +165,16 @@ static void ringTask(void *arg) {
     // hour of chasing wiring that was fine. This makes the difference audible:
     // no heartbeat means the task died, a heartbeat with a dark ring means the
     // pixels are being written and something past show() is wrong.
+#if UI_PROFILE
     if (millis() - lastReport >= 5000) {
       lastReport = millis();
       Serial.printf("ring: %lu frames, stack headroom %u bytes\n",
                     (unsigned long)frames,
                     (unsigned)uxTaskGetStackHighWaterMark(NULL));
     }
+#else
+    (void)lastReport;
+#endif
 
     vTaskDelay(pdMS_TO_TICKS(30));  // ~33 fps
   }
@@ -332,6 +349,7 @@ void loop() {
   lv_timer_handler();
   uint32_t dt = micros() - t0;
 
+#if UI_PROFILE
   static uint32_t uiFrames = 0, uiSum = 0, uiMax = 0, uiLast = 0;
   uiFrames++;
   uiSum += dt;
@@ -349,6 +367,9 @@ void loop() {
     uiFrames = uiSum = uiMax = 0;
     g_flushUs = g_flushPx = 0;
   }
+#else
+  (void)dt;
+#endif
 
   delay(2);
 }
