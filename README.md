@@ -505,3 +505,7 @@ a time, each in its own colour, so the ring names its own pin.
   ESP32 reset, so WS2812Bs hold their last latched frame through a reflash. A
   stale colour looks exactly like a freshly rendered one, and "still green
   after reflashing" was the observation that finally broke the deadlock.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
