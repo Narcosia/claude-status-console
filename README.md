@@ -439,6 +439,11 @@ use a VPN or an overlay network such as Tailscale.
 | `config.example.h` | template — copy to `config.h` |
 | `deploy.sh` | compile and flash |
 | `install-hooks.sh` | merge the hooks into `~/.claude/settings.json` |
+| `stage-demo.sh` | four invented sessions, one per state, for screenshots |
+
+`stage-demo.sh` exists because the card renders prompt text and assistant
+replies, so a candid photograph of a working device publishes whatever happened
+to be on it. Every name, path and prompt in that script is fabricated.
 
 ## Gotchas hit along the way
 

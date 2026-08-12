@@ -210,7 +210,12 @@ void uiInit(const Palette &palette, uint16_t ledCount) {
   lv_obj_set_style_text_font(lblBreak, &lv_font_montserrat_20, 0);
   lv_obj_set_style_text_color(lblBreak, lv_color_white(), 0);
   lv_obj_set_style_text_align(lblBreak, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(lblBreak, LV_ALIGN_CENTER, 0, 44);
+  // Bounded and wrapping: with four states present the breakdown runs past
+  // 400 px on one line, and on a round panel the ends disappear under the
+  // bezel rather than merely looking cramped.
+  lv_obj_set_width(lblBreak, 300);
+  lv_label_set_long_mode(lblBreak, LV_LABEL_LONG_WRAP);
+  lv_obj_align(lblBreak, LV_ALIGN_CENTER, 0, 46);
   lv_label_set_text(lblBreak, "");
 
   lblNet = lv_label_create(scr);
