@@ -87,19 +87,25 @@ static Classification classify(const char *event, const char *kind) {
   return c;
 }
 
+static inline bool isSep(char c) { return c == '/' || c == '\\'; }
+
 // The last path component of cwd, which is the project name in every layout
-// that matters. This is the only payload field beyond session_id and the event
-// name that this device retains.
+// that matters.
+//
+// Both separators are honoured because sessions arrive from Windows machines
+// too: splitting on '/' alone turns C:\Users\me\Documents\Vault into
+// "C:\Users\me\Documen" - the front of the path, truncated, which is the least
+// useful label available.
 static void basenameOf(const char *path, char *out, size_t n) {
   out[0] = '\0';
   if (!path || !path[0]) return;
 
   size_t len = strlen(path);
-  while (len > 1 && path[len - 1] == '/') len--;  // ignore a trailing slash
+  while (len > 1 && isSep(path[len - 1])) len--;  // ignore a trailing separator
 
   size_t start = 0;
   for (size_t i = 0; i < len; i++) {
-    if (path[i] == '/') start = i + 1;
+    if (isSep(path[i])) start = i + 1;
   }
   size_t take = len - start;
   if (take >= n) take = n - 1;
@@ -115,19 +121,24 @@ static void tailPath(const char *path, char *out, size_t n) {
   out[0] = '\0';
   if (!path || !path[0]) return;
 
-  // Collapse a leading /home/<user>/ to ~/.
+  // Collapse the home prefix to ~, on either platform: /home/<user>/... and
+  // C:\Users\<user>\... are the same for every session on a machine and only
+  // eat the width that distinguishes one project from another.
   const char *p = path;
+  const char *afterHome = nullptr;
   if (strncmp(p, "/home/", 6) == 0) {
-    const char *slash = strchr(p + 6, '/');
-    if (slash) {
-      size_t len = strlen(slash);  // includes the leading slash
-      if (len + 2 <= n) {
-        out[0] = '~';
-        memcpy(out + 1, slash, len + 1);
-        return;
-      }
-      p = slash + 1;
+    afterHome = strchr(p + 6, '/');
+  } else if (strncasecmp(p, "C:\\Users\\", 9) == 0) {
+    afterHome = strchr(p + 9, '\\');
+  }
+  if (afterHome) {
+    size_t len = strlen(afterHome);  // includes the leading separator
+    if (len + 2 <= n) {
+      out[0] = '~';
+      memcpy(out + 1, afterHome, len + 1);
+      return;
     }
+    p = afterHome + 1;
   }
 
   size_t len = strlen(p);

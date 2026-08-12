@@ -15,7 +15,7 @@
 //
 // Comment out USE_STATIC_IP to fall back to DHCP.
 #define USE_STATIC_IP
-#define STATIC_IP 192, 168, 1, 201
+#define STATIC_IP 192, 168, 1, 200
 #define STATIC_GATEWAY 192, 168, 1, 254
 #define STATIC_SUBNET 255, 255, 255, 0
 #define STATIC_DNS 192, 168, 1, 254

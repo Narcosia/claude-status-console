@@ -67,7 +67,7 @@ plain URL, so a query string works — put this in a project's
 `.claude/settings.json`:
 
 ```json
-{"type": "http", "url": "http://192.168.1.201/hook?label=ring%20firmware", "timeout": 5}
+{"type": "http", "url": "http://192.168.1.200/hook?label=ring%20firmware", "timeout": 5}
 ```
 
 Every session started in that directory then names itself `ring firmware`.
@@ -255,7 +255,7 @@ string, so a DHCP lease change would silently break the device.
 **4. Wire up the hooks:**
 
 ```sh
-./install-hooks.sh 192.168.1.201
+./install-hooks.sh 192.168.1.200
 ```
 
 Merges the nine hooks into `~/.claude/settings.json`, preserving everything
@@ -266,12 +266,46 @@ cleanly from the old ring at `.200`. `./install-hooks.sh --remove` undoes it.
 **5. Verify** without involving Claude Code:
 
 ```sh
-curl -s http://192.168.1.201/                 # current sessions as JSON
-curl -sX POST http://192.168.1.201/hook -H 'Content-Type: application/json' \
+curl -s http://192.168.1.200/                 # current sessions as JSON
+curl -sX POST http://192.168.1.200/hook -H 'Content-Type: application/json' \
   -d '{"session_id":"test-1","hook_event_name":"Stop","cwd":"/home/you/demo"}'
 # one pink arc should start pulsing, labelled "demo" when tapped
-curl -sX POST http://192.168.1.201/clear      # forget everything
+curl -sX POST http://192.168.1.200/clear      # forget everything
 ```
+
+## Multiple machines
+
+Hooks are per-machine configuration — there is no central registry, so **every
+computer running Claude Code needs its own hook config**. The device side needs
+no changes at all: it accepts any `session_id` from any source, and session ids
+are UUIDs, so sessions from different machines cannot collide. They simply
+appear as additional arcs.
+
+On each additional machine, with the repo cloned:
+
+```sh
+./install-hooks.sh 192.168.1.200
+curl -s http://192.168.1.200/health
+```
+
+**Windows machines work too.** Paths are parsed with both separators, so
+`C:\Users\me\Documents\Vault` names itself `Vault` rather than the front of the
+path truncated, and both home prefixes collapse to `~` — `/home/<user>/` and
+`C:\Users\<user>\` — since they are identical for every session on a machine
+and only consume the width that distinguishes one project from another.
+
+Requirements for a machine to participate:
+
+- **Same LAN.** The device is on a private address. A laptop on mobile data or
+  a different network cannot reach it.
+- **Do not port-forward the device to the internet.** Hook payloads contain
+  prompt text and file paths, there is no TLS, and `HOOK_TOKEN` travels in
+  cleartext. Use a VPN or an overlay network such as Tailscale instead.
+
+**Telling machines apart:** arcs carry no per-machine identity, so with sessions
+from several computers you can see *that* something wants attention but not
+*which* machine it is on. Give that machine's hook URL a `?label=`, or read the
+`path` field — a `C:\`-rooted path is unambiguous on sight.
 
 ## Endpoints
 

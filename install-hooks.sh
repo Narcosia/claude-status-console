@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Merge the status-console hooks into ~/.claude/settings.json on this machine.
 #
-#   ./install-hooks.sh [console-ip]     # default: 192.168.1.201
+#   ./install-hooks.sh [console-ip]     # default: 192.168.1.200
 #   ./install-hooks.sh --remove         # take them out again
 #
 # Safe to re-run: replaces only this device's hooks, leaves everything else alone.
@@ -24,7 +24,7 @@ FAST_EVENTS="SubagentStart SubagentStop TaskCreated TaskCompleted"
 if [[ "${1:-}" == "--remove" ]]; then
   MODE=remove; IP=""
 else
-  MODE=install; IP="${1:-192.168.1.201}"
+  MODE=install; IP="${1:-192.168.1.200}"
 fi
 
 command -v python3 >/dev/null || { echo "error: python3 required" >&2; exit 1; }
@@ -94,4 +94,4 @@ PY
 
 echo
 echo "Verify the console can be reached from this machine:"
-echo "    curl -s http://${IP:-192.168.1.201}/health"
+echo "    curl -s http://${IP:-192.168.1.200}/health"
