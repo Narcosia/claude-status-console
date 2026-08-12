@@ -39,10 +39,46 @@ breakdown underneath:
 1 needs you  2 working
 ```
 
-**Tap an arc** for the project name, state, age and running-agent count. Tap
-again to dismiss; it also times out after 8 seconds. Touches are resolved by
-angle from the centre rather than by hit-testing the arc widgets, because arc
-bounding boxes all overlap in the middle and would fight over the press.
+**Tap an arc** for that session's card:
+
+```
+     ring firmware            <- label, or the directory name
+  ~/claude-status-console      <- path, so same-named dirs differ
+ "fix the arc alignment on
+     the round display"        <- first line of the current prompt
+      working
+   aaaa1111  2m  3 agents
+```
+
+Tap again to dismiss; it also times out after 15 seconds. Touches are resolved
+by angle from the centre rather than by hit-testing the arc widgets, because
+arc bounding boxes all overlap in the middle and would fight over the press.
+
+### Naming sessions
+
+Directory names are often too generic to tell sessions apart — three sessions
+in the same repo all read `dotfiles`. Two things fix that.
+
+**The prompt line** does it automatically: the first line of whatever you last
+asked labels the session better than any directory ever will.
+
+**An explicit label** does it deliberately. Claude Code's `http` hook takes a
+plain URL, so a query string works — put this in a project's
+`.claude/settings.json`:
+
+```json
+{"type": "http", "url": "http://192.168.1.201/hook?label=ring%20firmware", "timeout": 5}
+```
+
+Every session started in that directory then names itself `ring firmware`.
+
+Project and user hooks *both* fire, so the device only ever **sets** a label
+when one is present and never clears it: the labelled POST wins and sticks,
+and the global hook installed by `install-hooks.sh` keeps working untouched.
+No wrapper script, no per-machine bookkeeping.
+
+`agent_type` is not a substitute here — it is only populated for subagents and
+for sessions started with `--agent`, so it cannot name an ordinary session.
 
 ### Themes
 
@@ -269,17 +305,28 @@ Hook payloads contain far more than session state — `user_input`,
 `last_assistant_message`, `message`, `cwd` and `transcript_path` all arrive in
 the POST body.
 
-**Read and kept: `session_id`, `hook_event_name`, the notification subtype, and
-the last path component of `cwd`.** Nothing else. The project name is the one
-deliberate addition over the old ring: an 8-character hex id is not enough to
-tell two arcs apart once there is a screen to name them on.
+**Read and kept:** `session_id`, `hook_event_name`, the notification subtype,
+`cwd` (both the basename and a `~`-collapsed tail of the full path), and **the
+first line of `user_prompt`**. Nothing else.
+
+**Still discarded:** `last_assistant_message`, `message`, `tool_input`,
+`transcript_path`, and everything past the prompt's first line.
 
 That boundary is enforced *during parsing*, not after it. The body is streamed
-off the socket through an ArduinoJson filter that admits only those five keys,
-so prompt text and assistant replies are skipped as they arrive and are never
-allocated at all. This is also why the HTTP server is hand-rolled on
-`WiFiServer` rather than using `WebServer`, which buffers the whole body into a
-`String` before any handler sees it.
+off the socket through an ArduinoJson filter that admits only those keys, so
+assistant replies are skipped as they arrive and are never allocated at all.
+This is also why the HTTP server is hand-rolled on `WiFiServer` rather than
+using `WebServer`, which buffers the whole body into a `String` before any
+handler sees it.
+
+**On admitting the prompt.** It is the largest deliberate step past what the
+old ring kept, and the reasoning is worth stating plainly: a directory name
+cannot distinguish three sessions in the same repo, and the first line of the
+prompt can. It changes what is *visible on a desk*, not what travels — the
+prompt is in every `UserPromptSubmit` payload already and always was; the
+filter only decided whether to keep it. If the screen is somewhere other
+people sit, drop `user_prompt` from the filter in `server.cpp` and the card
+falls back to the label and path.
 
 Two things to be aware of regardless:
 

@@ -106,17 +106,34 @@ Session *Registry::_getOrCreate(const char *sid) {
   return s;
 }
 
-void Registry::apply(const char *sid, SessionState state, int delta,
-                     bool resetPending, bool background, const char *project) {
+// "set if present, leave alone if absent" - see SessionUpdate.
+static void setIfGiven(char *dst, size_t cap, const char *src) {
+  if (!src || !src[0]) return;
+  strncpy(dst, src, cap - 1);
+  dst[cap - 1] = '\0';
+}
+
+const char *Session::displayName() const {
+  if (label[0]) return label;
+  if (project[0]) return project;
+  return sid;
+}
+
+void Registry::apply(const char *sid, const SessionUpdate &u) {
   if (!sid || !sid[0]) return;
   xSemaphoreTake(_lock, portMAX_DELAY);
 
   Session *s = _getOrCreate(sid);
 
-  if (project && project[0]) {
-    strncpy(s->project, project, PROJECT_LEN - 1);
-    s->project[PROJECT_LEN - 1] = '\0';
-  }
+  setIfGiven(s->project, PROJECT_LEN, u.project);
+  setIfGiven(s->path, PATH_LEN, u.path);
+  setIfGiven(s->prompt, PROMPT_LEN, u.prompt);
+  setIfGiven(s->label, LABEL_LEN, u.label);
+
+  int delta = u.delta;
+  bool background = u.background;
+  bool resetPending = u.resetPending;
+  SessionState state = u.state;
 
   if (resetPending) {
     // A new prompt means the previous turn's background work is over. This is

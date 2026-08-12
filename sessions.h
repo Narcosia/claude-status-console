@@ -38,6 +38,9 @@ uint8_t urgency(SessionState s);
 static const size_t MAX_SESSIONS = 16;
 static const size_t SID_LEN = 40;      // uuid plus room for a NUL
 static const size_t PROJECT_LEN = 25;  // cwd basename, truncated
+static const size_t PATH_LEN = 64;     // full cwd, head-truncated if longer
+static const size_t PROMPT_LEN = 96;   // first line of the prompt, truncated
+static const size_t LABEL_LEN = 25;    // explicit name from ?label=
 
 // How long after the last background-work event a session keeps reading as
 // BACKGROUND. A recency window rather than a counter because SubagentStart
@@ -48,7 +51,10 @@ static const uint32_t DEFAULT_BACKGROUND_HOLD_MS = 90UL * 1000UL;
 
 struct Session {
   char sid[SID_LEN];
-  char project[PROJECT_LEN];
+  char project[PROJECT_LEN];  // cwd basename
+  char path[PATH_LEN];        // full cwd, so same-named directories differ
+  char prompt[PROMPT_LEN];    // first line of the current prompt
+  char label[LABEL_LEN];      // explicit name from ?label= on the hook URL
   SessionState state;
   uint32_t order;    // first-seen sequence, so arcs keep a stable position
   uint32_t updated;  // millis() of the last event
@@ -59,6 +65,28 @@ struct Session {
   bool hasBg;
 
   bool busyInBackground() const;
+
+  // What to call this session on screen, most specific first. An explicit
+  // label beats the directory name, which beats a hex id nobody can read.
+  const char *displayName() const;
+};
+
+// One event's worth of change. A struct rather than a positional argument list
+// because most fields are absent from any given event, and `apply(sid, state,
+// 0, false, true, nullptr, nullptr, cwd)` is unreadable at the call site.
+//
+// Every text field is "set if present, leave alone if null". That is what lets
+// a labelled project hook and an unlabelled global hook coexist: whichever
+// carries the label wins, and the other never clears it.
+struct SessionUpdate {
+  SessionState state = ST_NONE;  // ST_NONE leaves the state alone
+  int delta = 0;                 // background work counter delta
+  bool resetPending = false;
+  bool background = false;
+  const char *project = nullptr;
+  const char *path = nullptr;
+  const char *prompt = nullptr;
+  const char *label = nullptr;
 };
 
 // The state to render, as opposed to the last event received.
@@ -79,14 +107,10 @@ class Registry {
 
   // Record one event: a state change, a work delta, and/or a background ping.
   //
-  // `state` may be ST_NONE to leave the session's state alone - used by the
-  // background-work events, which only mark the session busy elsewhere.
-  // `resetPending` re-baselines both the counter and the recency window; it is
+  // resetPending re-baselines both the counter and the recency window; it is
   // used on UserPromptSubmit, and is what releases a session from BACKGROUND
   // once its agents have genuinely finished and you have replied.
-  // `project` may be nullptr to leave the stored name untouched.
-  void apply(const char *sid, SessionState state, int delta, bool resetPending,
-             bool background, const char *project);
+  void apply(const char *sid, const SessionUpdate &u);
 
   // Drop expired sessions and finished ones past their linger window.
   void prune();

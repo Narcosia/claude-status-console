@@ -48,7 +48,9 @@ class HookServer {
 
  private:
   void service(WiFiClient &client);
-  void routeHook(WiFiClient &client, size_t contentLength);
+  // `query` is whatever followed '?' in the request path, so a project-level
+  // hook can name its session with ?label=...
+  void routeHook(WiFiClient &client, size_t contentLength, const char *query);
   void respond(WiFiClient &client, int status, const char *body = "",
                const char *ctype = "text/plain");
   void sendStatus(WiFiClient &client);

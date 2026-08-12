@@ -114,7 +114,10 @@ static void lvglTick(void *arg) {
 // takes a snapshot rather than holding the registry lock for a whole frame.
 static void ringTask(void *arg) {
   (void)arg;
-  Session snap[MAX_SESSIONS];
+  // Static, not stack: a Session now carries the full path and a line of
+  // prompt, so 16 of them is ~4.3 KB - enough to matter against an 8 KB task
+  // stack. Safe because only this task touches it.
+  static Session snap[MAX_SESSIONS];
   uint32_t phase = 0;
   uint32_t frames = 0;
   uint32_t lastReport = 0;
@@ -304,7 +307,7 @@ void loop() {
 
   if (now - lastUi >= 33) {
     lastUi = now;
-    Session snap[MAX_SESSIONS];
+    static Session snap[MAX_SESSIONS];  // see the note in ringTask
     size_t n = registry.snapshot(snap, MAX_SESSIONS);
     uiUpdate(snap, n, g_phase, DONE_LINGER_MS);
   }

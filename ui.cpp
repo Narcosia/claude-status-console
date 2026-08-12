@@ -24,7 +24,9 @@ static const float BAND_INNER = ARC_SIZE / 2.0f - ARC_W - 12.0f;
 static const lv_opa_t PULSE_FLOOR = 42;   // 255/6, matching the ring
 static const lv_opa_t COMET_BODY = 55;
 
-static const uint32_t DETAIL_HOLD_MS = 8000;
+// Longer than the old 8 s: there is now a prompt line to actually read, not
+// just a state word to glance at.
+static const uint32_t DETAIL_HOLD_MS = 15000;
 
 static lv_obj_t *arcBase[MAX_SESSIONS];
 static lv_obj_t *arcHead[MAX_SESSIONS];
@@ -35,6 +37,8 @@ static lv_obj_t *lblNet;
 
 static lv_obj_t *detail;
 static lv_obj_t *lblDetailName;
+static lv_obj_t *lblDetailPath;
+static lv_obj_t *lblDetailPrompt;
 static lv_obj_t *lblDetailState;
 static lv_obj_t *lblDetailMeta;
 
@@ -215,8 +219,10 @@ void uiInit(const Palette &palette, uint16_t ledCount) {
   lv_label_set_text(lblNet, "");
 
   // --- detail card ---------------------------------------------------------
+  // Sized to the largest rectangle that stays clear of a 466 px circle's edge
+  // with margin - the corners are the first thing a round panel clips.
   detail = lv_obj_create(scr);
-  lv_obj_set_size(detail, 320, 190);
+  lv_obj_set_size(detail, 340, 250);
   lv_obj_center(detail);
   lv_obj_set_style_radius(detail, 24, 0);
   lv_obj_set_style_bg_color(detail, lv_color_hex(0x0d0d10), 0);
@@ -227,23 +233,44 @@ void uiInit(const Palette &palette, uint16_t ledCount) {
   lv_obj_clear_flag(detail, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_flag(detail, LV_OBJ_FLAG_HIDDEN);
 
+  // Name: the label if one was set, else the directory.
   lblDetailName = lv_label_create(detail);
   lv_obj_set_style_text_font(lblDetailName, &lv_font_montserrat_28, 0);
   lv_obj_set_style_text_color(lblDetailName, lv_color_white(), 0);
   lv_label_set_long_mode(lblDetailName, LV_LABEL_LONG_DOT);
-  lv_obj_set_width(lblDetailName, 280);
+  lv_obj_set_width(lblDetailName, 300);
   lv_obj_set_style_text_align(lblDetailName, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(lblDetailName, LV_ALIGN_TOP_MID, 0, 8);
+  lv_obj_align(lblDetailName, LV_ALIGN_TOP_MID, 0, 4);
+
+  // Path, dimmed: what separates two sessions with the same directory name.
+  lblDetailPath = lv_label_create(detail);
+  lv_obj_set_style_text_font(lblDetailPath, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lblDetailPath, lv_color_hex(0x6b7075), 0);
+  lv_label_set_long_mode(lblDetailPath, LV_LABEL_LONG_DOT);
+  lv_obj_set_width(lblDetailPath, 300);
+  lv_obj_set_style_text_align(lblDetailPath, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lblDetailPath, LV_ALIGN_TOP_MID, 0, 40);
+
+  // The prompt, wrapped over two lines. This is the line that actually answers
+  // "which agent is this", so it gets the most room.
+  lblDetailPrompt = lv_label_create(detail);
+  lv_obj_set_style_text_font(lblDetailPrompt, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lblDetailPrompt, lv_color_hex(0xc8ccd0), 0);
+  lv_label_set_long_mode(lblDetailPrompt, LV_LABEL_LONG_DOT);
+  lv_obj_set_width(lblDetailPrompt, 296);
+  lv_obj_set_height(lblDetailPrompt, 40);
+  lv_obj_set_style_text_align(lblDetailPrompt, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lblDetailPrompt, LV_ALIGN_CENTER, 0, 2);
 
   lblDetailState = lv_label_create(detail);
   lv_obj_set_style_text_font(lblDetailState, &lv_font_montserrat_20, 0);
-  lv_obj_align(lblDetailState, LV_ALIGN_CENTER, 0, 8);
+  lv_obj_align(lblDetailState, LV_ALIGN_BOTTOM_MID, 0, -34);
 
   lblDetailMeta = lv_label_create(detail);
   lv_obj_set_style_text_font(lblDetailMeta, &lv_font_montserrat_14, 0);
   lv_obj_set_style_text_color(lblDetailMeta, lv_color_hex(0x9aa0a6), 0);
   lv_obj_set_style_text_align(lblDetailMeta, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(lblDetailMeta, LV_ALIGN_BOTTOM_MID, 0, -10);
+  lv_obj_align(lblDetailMeta, LV_ALIGN_BOTTOM_MID, 0, -8);
 }
 
 void uiSetNetwork(const char *text) {
@@ -377,7 +404,14 @@ static void drawDetail() {
   SessionState st = displayState(s);
   lv_color_t col = colourOf(st);
 
-  lv_label_set_text(lblDetailName, s.project[0] ? s.project : s.sid);
+  lv_label_set_text(lblDetailName, s.displayName());
+  lv_label_set_text(lblDetailPath, s.path[0] ? s.path : "");
+  // Quoted so a prompt fragment is not mistaken for a status line.
+  if (s.prompt[0]) {
+    lv_label_set_text_fmt(lblDetailPrompt, "\"%s\"", s.prompt);
+  } else {
+    lv_label_set_text(lblDetailPrompt, "");
+  }
   lv_label_set_text(lblDetailState, stateWord(st));
   lv_obj_set_style_text_color(lblDetailState, col, 0);
   lv_obj_set_style_border_color(detail, col, 0);

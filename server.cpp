@@ -107,6 +107,97 @@ static void basenameOf(const char *path, char *out, size_t n) {
   out[take] = '\0';
 }
 
+// The tail of a path, so two sessions in same-named directories are tellable
+// apart. The tail rather than the head because the distinguishing part of
+// ~/work/api vs ~/personal/api is nearer the end, and $HOME is collapsed to ~
+// since it is the same for every session on a machine.
+static void tailPath(const char *path, char *out, size_t n) {
+  out[0] = '\0';
+  if (!path || !path[0]) return;
+
+  // Collapse a leading /home/<user>/ to ~/.
+  const char *p = path;
+  if (strncmp(p, "/home/", 6) == 0) {
+    const char *slash = strchr(p + 6, '/');
+    if (slash) {
+      size_t len = strlen(slash);  // includes the leading slash
+      if (len + 2 <= n) {
+        out[0] = '~';
+        memcpy(out + 1, slash, len + 1);
+        return;
+      }
+      p = slash + 1;
+    }
+  }
+
+  size_t len = strlen(p);
+  if (len < n) {
+    memcpy(out, p, len + 1);
+    return;
+  }
+  // Too long: keep the tail, marked so it is obviously truncated.
+  size_t keep = n - 4;
+  out[0] = out[1] = out[2] = '.';
+  memcpy(out + 3, p + len - keep, keep + 1);
+}
+
+// The first line of the prompt, whitespace-trimmed and truncated. This is the
+// label that actually says what a session is doing; a directory name does not.
+static void firstLineOf(const char *text, char *out, size_t n) {
+  out[0] = '\0';
+  if (!text) return;
+
+  while (*text == ' ' || *text == '\t' || *text == '\n' || *text == '\r') text++;
+
+  size_t i = 0;
+  while (text[i] && text[i] != '\n' && text[i] != '\r' && i < n - 1) {
+    out[i] = text[i];
+    i++;
+  }
+  while (i > 0 && out[i - 1] == ' ') i--;  // trailing space
+  out[i] = '\0';
+}
+
+// Percent-decoding, in place semantics: "ring%20firmware" -> "ring firmware".
+static int hexVal(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return -1;
+}
+
+// Pulls one parameter out of a query string. Used for ?label=, which is how a
+// project-level hook names its sessions without a wrapper script.
+static void queryParam(const char *query, const char *key, char *out,
+                       size_t n) {
+  out[0] = '\0';
+  if (!query || !query[0]) return;
+
+  size_t keyLen = strlen(key);
+  const char *p = query;
+  while (p && *p) {
+    if (strncmp(p, key, keyLen) == 0 && p[keyLen] == '=') {
+      const char *v = p + keyLen + 1;
+      size_t i = 0;
+      while (*v && *v != '&' && i < n - 1) {
+        if (*v == '%' && hexVal(v[1]) >= 0 && hexVal(v[2]) >= 0) {
+          out[i++] = (char)(hexVal(v[1]) * 16 + hexVal(v[2]));
+          v += 3;
+        } else if (*v == '+') {
+          out[i++] = ' ';
+          v++;
+        } else {
+          out[i++] = *v++;
+        }
+      }
+      out[i] = '\0';
+      return;
+    }
+    p = strchr(p, '&');
+    if (p) p++;
+  }
+}
+
 // Feeds ArduinoJson straight from the socket, bounded by Content-Length and a
 // deadline so a stalled client cannot hang the loop.
 struct BodyReader {
@@ -209,8 +300,13 @@ void HookServer::service(WiFiClient &client) {
 
   bool isPost = strcmp(method, "POST") == 0;
 
-  if (isPost && strncmp(path, "/hook", 5) == 0) {
-    routeHook(client, contentLength);
+  // Split the query off the path, so routing compares against "/hook" whether
+  // or not the caller appended ?label=...
+  char *query = strchr(path, '?');
+  if (query) *query++ = '\0';
+
+  if (isPost && strcmp(path, "/hook") == 0) {
+    routeHook(client, contentLength, query);
   } else if (strncmp(path, "/health", 7) == 0) {
     respond(client, 200, "ok");
   } else if (strncmp(path, "/events", 7) == 0) {
@@ -241,17 +337,23 @@ void HookServer::service(WiFiClient &client) {
   }
 }
 
-void HookServer::routeHook(WiFiClient &client, size_t contentLength) {
+void HookServer::routeHook(WiFiClient &client, size_t contentLength,
+                           const char *query) {
   // The filter is the privacy boundary, and it is enforced during parsing:
   // fields not named here are skipped as they stream past and are never
-  // allocated. user_input, last_assistant_message, message and
+  // allocated. last_assistant_message, message, tool_input and
   // transcript_path all fall on the far side of it.
+  //
+  // user_prompt is deliberately on this side: its first line is by far the
+  // best label a session can have, and it already crosses the LAN in every
+  // payload - admitting it changes what is shown on a desk, not what travels.
   JsonDocument filter;
   filter["session_id"] = true;
   filter["hook_event_name"] = true;
   filter["notification_type"] = true;
   filter["stop_reason"] = true;
   filter["cwd"] = true;
+  filter["user_prompt"] = true;
 
   BodyReader reader{&client, contentLength, millis() + REQUEST_TIMEOUT_MS};
   JsonDocument doc;
@@ -278,6 +380,7 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength) {
   const char *kind = doc["notification_type"] | (const char *)nullptr;
   if (!kind) kind = doc["stop_reason"] | (const char *)nullptr;
   const char *cwd = doc["cwd"] | (const char *)nullptr;
+  const char *userPrompt = doc["user_prompt"] | (const char *)nullptr;
 
   Classification c = classify(event, kind);
 
@@ -285,10 +388,29 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength) {
     char project[PROJECT_LEN];
     basenameOf(cwd, project, sizeof(project));
 
-    _registry.apply(sid, c.state, c.delta, c.reset, c.background, project);
+    char shortPath[PATH_LEN];
+    tailPath(cwd, shortPath, sizeof(shortPath));
+
+    char firstLine[PROMPT_LEN];
+    firstLineOf(userPrompt, firstLine, sizeof(firstLine));
+
+    char label[LABEL_LEN];
+    queryParam(query, "label", label, sizeof(label));
+
+    SessionUpdate u;
+    u.state = c.state;
+    u.delta = c.delta;
+    u.resetPending = c.reset;
+    u.background = c.background;
+    u.project = project[0] ? project : nullptr;
+    u.path = shortPath[0] ? shortPath : nullptr;
+    u.prompt = firstLine[0] ? firstLine : nullptr;
+    u.label = label[0] ? label : nullptr;
+
+    _registry.apply(sid, u);
 
     // Read back what the session now looks like, for the log and the console.
-    Session snap[MAX_SESSIONS];
+    static Session snap[MAX_SESSIONS];  // static: ~4.3 KB is too much stack
     size_t n = _registry.snapshot(snap, MAX_SESSIONS);
     SessionState shown = ST_NONE;
     int16_t pending = 0;
@@ -323,7 +445,7 @@ void HookServer::record(const char *sid, const char *event, const char *kind,
 }
 
 void HookServer::sendStatus(WiFiClient &client) {
-  Session snap[MAX_SESSIONS];
+  static Session snap[MAX_SESSIONS];  // static: ~4.3 KB is too much stack
   size_t n = _registry.snapshot(snap, MAX_SESSIONS);
 
   JsonDocument doc;
@@ -336,7 +458,11 @@ void HookServer::sendStatus(WiFiClient &client) {
     char sid8[9];
     snprintf(sid8, sizeof(sid8), "%.8s", s.sid);
     o["session"] = sid8;
+    o["name"] = s.displayName();
     o["project"] = s.project;
+    o["path"] = s.path;
+    o["label"] = s.label;
+    o["prompt"] = s.prompt;
     o["state"] = stateName(displayState(s));
     o["raw_state"] = stateName(s.state);
     o["pending"] = s.pending;
