@@ -494,11 +494,27 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength,
     char shortPath[PATH_LEN];
     tailPath(cwd, shortPath, sizeof(shortPath));
 
+    // Text is only taken from the parent session's own events.
+    //
+    // Subagents do not get their own arc - every SubagentStart/Stop carries the
+    // PARENT's session_id, which is what makes one arc per session work. But
+    // SubagentStop also carries last_assistant_message, and that is the
+    // subagent's output, not the session's. Accepting it meant a session busy
+    // with background agents had its description overwritten again and again by
+    // whatever its agents last said, which is both less descriptive than the
+    // session's own prompt and a stream of text nobody asked to see on a desk.
+    //
+    // strcmp is exact, so "Stop" here does not match "SubagentStop".
+    bool fromPrompt = event && strcmp(event, "UserPromptSubmit") == 0;
+    bool fromParentStop = event && strcmp(event, "Stop") == 0;
+
     char firstLine[PROMPT_LEN];
-    condense(userPrompt, firstLine, sizeof(firstLine));
+    firstLine[0] = '\0';
+    if (fromPrompt) condense(userPrompt, firstLine, sizeof(firstLine));
 
     char replyLine[PROMPT_LEN];
-    condense(assistantMsg, replyLine, sizeof(replyLine));
+    replyLine[0] = '\0';
+    if (fromParentStop) condense(assistantMsg, replyLine, sizeof(replyLine));
 
     char label[LABEL_LEN];
     queryParam(query, "label", label, sizeof(label));

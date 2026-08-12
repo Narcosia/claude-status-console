@@ -397,6 +397,16 @@ condensed first sentence of **`user_prompt`** and of
 **Still discarded:** `message`, `tool_input`, `tool_result`, `transcript_path`,
 and everything past the first sentence of the two message fields.
 
+**Only from the parent session's own events.** Subagents never get their own
+arc — every `SubagentStart`/`SubagentStop` carries the *parent's* `session_id`,
+which is what makes one-arc-per-session work. But `SubagentStop` also carries
+`last_assistant_message`, and that is the subagent's output. Taking it meant a
+session busy with background agents had its description overwritten repeatedly
+by whatever its agents last said: less descriptive than the session's own
+prompt, and a stream of text nobody asked to have on a desk. So `user_prompt`
+is read only from `UserPromptSubmit`, and `last_assistant_message` only from
+`Stop` — never from `SubagentStop`.
+
 That boundary is enforced *during parsing*, not after it. The body is streamed
 off the socket through an ArduinoJson filter that admits only those keys, so
 assistant replies are skipped as they arrive and are never allocated at all.
