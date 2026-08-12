@@ -38,7 +38,8 @@ static lv_obj_t *lblNet;
 static lv_obj_t *detail;
 static lv_obj_t *lblDetailName;
 static lv_obj_t *lblDetailPath;
-static lv_obj_t *lblDetailPrompt;
+static lv_obj_t *lblDetailTopic;
+static lv_obj_t *lblDetailNow;
 static lv_obj_t *lblDetailState;
 static lv_obj_t *lblDetailMeta;
 
@@ -251,16 +252,27 @@ void uiInit(const Palette &palette, uint16_t ledCount) {
   lv_obj_set_style_text_align(lblDetailPath, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_align(lblDetailPath, LV_ALIGN_TOP_MID, 0, 40);
 
-  // The prompt, wrapped over two lines. This is the line that actually answers
-  // "which agent is this", so it gets the most room.
-  lblDetailPrompt = lv_label_create(detail);
-  lv_obj_set_style_text_font(lblDetailPrompt, &lv_font_montserrat_14, 0);
-  lv_obj_set_style_text_color(lblDetailPrompt, lv_color_hex(0xc8ccd0), 0);
-  lv_label_set_long_mode(lblDetailPrompt, LV_LABEL_LONG_DOT);
-  lv_obj_set_width(lblDetailPrompt, 296);
-  lv_obj_set_height(lblDetailPrompt, 40);
-  lv_obj_set_style_text_align(lblDetailPrompt, LV_TEXT_ALIGN_CENTER, 0);
-  lv_obj_align(lblDetailPrompt, LV_ALIGN_CENTER, 0, 2);
+  // The topic - the session's first prompt, condensed. This is the line that
+  // separates three sessions sharing one directory, so it gets the most room
+  // and it never changes for the life of the session.
+  lblDetailTopic = lv_label_create(detail);
+  lv_obj_set_style_text_font(lblDetailTopic, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lblDetailTopic, lv_color_hex(0xe8eaed), 0);
+  lv_label_set_long_mode(lblDetailTopic, LV_LABEL_LONG_DOT);
+  lv_obj_set_width(lblDetailTopic, 296);
+  lv_obj_set_height(lblDetailTopic, 54);
+  lv_obj_set_style_text_align(lblDetailTopic, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lblDetailTopic, LV_ALIGN_CENTER, 0, -12);
+
+  // What it moved on to, shown only while the session is actually running and
+  // only when it differs from the topic - otherwise it is noise.
+  lblDetailNow = lv_label_create(detail);
+  lv_obj_set_style_text_font(lblDetailNow, &lv_font_montserrat_14, 0);
+  lv_obj_set_style_text_color(lblDetailNow, lv_color_hex(0x8a8f94), 0);
+  lv_label_set_long_mode(lblDetailNow, LV_LABEL_LONG_DOT);
+  lv_obj_set_width(lblDetailNow, 296);
+  lv_obj_set_style_text_align(lblDetailNow, LV_TEXT_ALIGN_CENTER, 0);
+  lv_obj_align(lblDetailNow, LV_ALIGN_CENTER, 0, 30);
 
   lblDetailState = lv_label_create(detail);
   lv_obj_set_style_text_font(lblDetailState, &lv_font_montserrat_20, 0);
@@ -406,11 +418,23 @@ static void drawDetail() {
 
   lv_label_set_text(lblDetailName, s.displayName());
   lv_label_set_text(lblDetailPath, s.path[0] ? s.path : "");
-  // Quoted so a prompt fragment is not mistaken for a status line.
-  if (s.prompt[0]) {
-    lv_label_set_text_fmt(lblDetailPrompt, "\"%s\"", s.prompt);
+  // Prefer the topic - it is stable and it is what tells two sessions in one
+  // folder apart. Fall back to the latest prompt for a session first seen
+  // mid-flight, which has no first prompt to remember.
+  const char *topic = s.topic[0] ? s.topic : s.prompt;
+  if (topic[0]) {
+    // Quoted so a prompt fragment is not mistaken for a status line.
+    lv_label_set_text_fmt(lblDetailTopic, "\"%s\"", topic);
   } else {
-    lv_label_set_text(lblDetailPrompt, "");
+    // Nothing yet: say so rather than leaving a hole the eye reads as a bug.
+    lv_label_set_text(lblDetailTopic, "no prompt seen yet");
+  }
+
+  bool running = (st == ST_WORKING || st == ST_BACKGROUND);
+  if (running && s.prompt[0] && strcmp(s.prompt, topic) != 0) {
+    lv_label_set_text_fmt(lblDetailNow, "now: %s", s.prompt);
+  } else {
+    lv_label_set_text(lblDetailNow, "");
   }
   lv_label_set_text(lblDetailState, stateWord(st));
   lv_obj_set_style_text_color(lblDetailState, col, 0);

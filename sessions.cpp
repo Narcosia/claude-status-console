@@ -130,6 +130,14 @@ void Registry::apply(const char *sid, const SessionUpdate &u) {
   setIfGiven(s->prompt, PROMPT_LEN, u.prompt);
   setIfGiven(s->label, LABEL_LEN, u.label);
 
+  // The topic is the session's FIRST prompt and is never overwritten. Several
+  // sessions in one directory share a name and a path, so the only thing that
+  // tells them apart is what each was asked to do - and that has to stay put
+  // rather than changing with every turn.
+  if (u.prompt && u.prompt[0] && !s->topic[0]) {
+    setIfGiven(s->topic, PROMPT_LEN, u.prompt);
+  }
+
   int delta = u.delta;
   bool background = u.background;
   bool resetPending = u.resetPending;

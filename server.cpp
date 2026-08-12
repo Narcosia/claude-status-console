@@ -1,6 +1,7 @@
 #include "server.h"
 
 #include <ArduinoJson.h>
+#include <ctype.h>
 #include <string.h>
 
 #include "ring.h"
@@ -152,20 +153,99 @@ static void tailPath(const char *path, char *out, size_t n) {
   memcpy(out + 3, p + len - keep, keep + 1);
 }
 
-// The first line of the prompt, whitespace-trimmed and truncated. This is the
-// label that actually says what a session is doing; a directory name does not.
-static void firstLineOf(const char *text, char *out, size_t n) {
+// Openers that carry no information about the work, longest first so that
+// "i would like you to" wins over any shorter prefix of itself. Stored without
+// a trailing space: what follows may be a space OR a comma, and requiring a
+// space is what let "Hey, can you please ..." through untouched.
+//
+// Words that can carry meaning - "now", "next", "then", "just" - are
+// deliberately absent. Stripping those loses information more often than it
+// saves space.
+static const char *FILLER[] = {
+    "i would like you to", "i'd like you to", "id like you to",
+    "i want you to",       "i need you to",   "could you please",
+    "can you please",      "we need to",      "we should",
+    "could you",           "would you",       "will you",
+    "can you",             "help me",         "please",
+    "let's",               "lets",            "okay",
+    "hey",                 "hi",              "ok",
+    "so",
+};
+
+static bool startsWithI(const char *s, const char *prefix) {
+  while (*prefix) {
+    if (tolower((unsigned char)*s) != tolower((unsigned char)*prefix)) {
+      return false;
+    }
+    s++;
+    prefix++;
+  }
+  return true;
+}
+
+// Condense a prompt into something that fits on a card and still says what the
+// session is working on.
+//
+// This is deliberately not summarisation - the device cannot run a model. It
+// strips filler openers, keeps the first sentence, and truncates on a word
+// boundary. On real prompts that recovers most of the value: "Hey, can you
+// please look at why the arc alignment is off? I think..." becomes "look at
+// why the arc alignment is off".
+static void condense(const char *text, char *out, size_t n) {
   out[0] = '\0';
   if (!text) return;
 
-  while (*text == ' ' || *text == '\t' || *text == '\n' || *text == '\r') text++;
+  const char *p = text;
+  while (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\r') p++;
 
+  // Strip filler openers, repeatedly and in any order, so "Hey, can you please
+  // index..." sheds all three. A match only counts when the opener is followed
+  // by a separator - otherwise "so" would eat the front of "sort the files".
+  bool stripped = true;
+  while (stripped) {
+    stripped = false;
+    for (size_t i = 0; i < sizeof(FILLER) / sizeof(FILLER[0]); i++) {
+      if (!startsWithI(p, FILLER[i])) continue;
+      const char *after = p + strlen(FILLER[i]);
+      if (*after != ' ' && *after != ',' && *after != ':') continue;
+      p = after;
+      while (*p == ' ' || *p == ',' || *p == ':') p++;
+      stripped = true;
+      break;
+    }
+  }
+  // A stripped-to-nothing prompt ("please?") is worse than the original.
+  if (!*p) p = text;
+
+  // First sentence or line, whichever ends first.
   size_t i = 0;
-  while (text[i] && text[i] != '\n' && text[i] != '\r' && i < n - 1) {
-    out[i] = text[i];
+  bool truncated = false;
+  while (p[i] && p[i] != '\n' && p[i] != '\r' && p[i] != '.' && p[i] != '?' &&
+         p[i] != '!') {
+    if (i >= n - 1) {
+      truncated = true;
+      break;
+    }
+    out[i] = p[i];
     i++;
   }
-  while (i > 0 && out[i - 1] == ' ') i--;  // trailing space
+  out[i] = '\0';
+
+  if (truncated) {
+    // Back up to a word boundary so the tail is not a fragment of a word.
+    size_t cut = i;
+    while (cut > 0 && out[cut - 1] != ' ') cut--;
+    if (cut > n / 3) i = cut;  // only if it does not cost most of the line
+    while (i > 0 && out[i - 1] == ' ') i--;
+    // "..." rather than the ellipsis character: the montserrat subsets built
+    // into this firmware do not carry U+2026.
+    if (i + 4 <= n) {
+      memcpy(out + i, "...", 4);
+      return;
+    }
+  }
+
+  while (i > 0 && (out[i - 1] == ' ' || out[i - 1] == ',')) i--;
   out[i] = '\0';
 }
 
@@ -403,7 +483,7 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength,
     tailPath(cwd, shortPath, sizeof(shortPath));
 
     char firstLine[PROMPT_LEN];
-    firstLineOf(userPrompt, firstLine, sizeof(firstLine));
+    condense(userPrompt, firstLine, sizeof(firstLine));
 
     char label[LABEL_LEN];
     queryParam(query, "label", label, sizeof(label));
@@ -473,6 +553,7 @@ void HookServer::sendStatus(WiFiClient &client) {
     o["project"] = s.project;
     o["path"] = s.path;
     o["label"] = s.label;
+    o["topic"] = s.topic;
     o["prompt"] = s.prompt;
     o["state"] = stateName(displayState(s));
     o["raw_state"] = stateName(s.state);

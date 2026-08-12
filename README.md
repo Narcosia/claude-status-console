@@ -59,8 +59,28 @@ arc bounding boxes all overlap in the middle and would fight over the press.
 Directory names are often too generic to tell sessions apart — three sessions
 in the same repo all read `dotfiles`. Two things fix that.
 
-**The prompt line** does it automatically: the first line of whatever you last
-asked labels the session better than any directory ever will.
+**The topic line** does it automatically. It is the session's **first** prompt,
+condensed, and it never changes afterwards — several sessions in one directory
+share a name and a path, so the only thing separating them is what each was
+asked to do, and that has to stay put rather than following every turn. A
+second `now:` line appears while a session is actually running, if it has moved
+on from what it started with.
+
+Prompts are condensed rather than summarised — the device cannot run a model.
+Filler openers are stripped, the first sentence kept, and the tail cut on a
+word boundary:
+
+```
+"Hey, can you please look at why the arc alignment is off on the
+ round display? I think it might be the offset..."
+        ↓
+"look at why the arc alignment is off on the round display"
+```
+
+Real summarisation would mean either an API key on the device and your prompts
+leaving the LAN, or a `command` hook that shells out to a model — reintroducing
+the wrapper script this design exists to avoid. Condensing recovers most of the
+value for neither cost.
 
 **An explicit label** does it deliberately. Claude Code's `http` hook takes a
 plain URL, so a query string works — put this in a project's

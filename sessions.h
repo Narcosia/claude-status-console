@@ -53,7 +53,8 @@ struct Session {
   char sid[SID_LEN];
   char project[PROJECT_LEN];  // cwd basename
   char path[PATH_LEN];        // full cwd, so same-named directories differ
-  char prompt[PROMPT_LEN];    // first line of the current prompt
+  char topic[PROMPT_LEN];     // condensed FIRST prompt - stable identity
+  char prompt[PROMPT_LEN];    // condensed latest prompt - current activity
   char label[LABEL_LEN];      // explicit name from ?label= on the hook URL
   SessionState state;
   uint32_t order;    // first-seen sequence, so arcs keep a stable position
