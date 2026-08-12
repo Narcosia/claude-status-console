@@ -113,6 +113,34 @@ static void setIfGiven(char *dst, size_t cap, const char *src) {
   dst[cap - 1] = '\0';
 }
 
+// Append an agent type to the comma-joined list if it is not already there.
+//
+// Compared token by token rather than with strstr, so "Explore" does not
+// suppress "ExploreDeep", and so a name is not matched inside another.
+static void addAgent(char *list, size_t cap, const char *name) {
+  if (!name || !name[0]) return;
+
+  size_t nameLen = strlen(name);
+  for (const char *p = list; *p;) {
+    const char *sep = strstr(p, ", ");
+    size_t tokLen = sep ? (size_t)(sep - p) : strlen(p);
+    if (tokLen == nameLen && strncmp(p, name, nameLen) == 0) return;
+    if (!sep) break;
+    p = sep + 2;
+  }
+
+  size_t cur = strlen(list);
+  size_t need = (cur ? 2 : 0) + nameLen;
+  // Full: keep the ones already seen rather than churning the tail. Which
+  // agents started is more useful than which started most recently.
+  if (cur + need + 1 > cap) return;
+  if (cur) {
+    memcpy(list + cur, ", ", 2);
+    cur += 2;
+  }
+  memcpy(list + cur, name, nameLen + 1);
+}
+
 const char *Session::displayName() const {
   if (label[0]) return label;
   if (project[0]) return project;
@@ -144,12 +172,17 @@ void Registry::apply(const char *sid, const SessionUpdate &u) {
   bool resetPending = u.resetPending;
   SessionState state = u.state;
 
+  if (u.agentType) addAgent(s->agents, AGENTS_LEN, u.agentType);
+
   if (resetPending) {
     // A new prompt means the previous turn's background work is over. This is
     // also what stops the window holding a session in BACKGROUND after its
     // agents have finished.
     s->pending = 0;
     s->hasBg = false;
+    // The agent list belongs to the turn that spawned it. Carrying last turn's
+    // agents into this one would describe work that has already finished.
+    s->agents[0] = '\0';
   }
   if (delta) {
     int v = s->pending + delta;

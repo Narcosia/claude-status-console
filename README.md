@@ -50,6 +50,19 @@ breakdown underneath:
    aaaa1111  2m  3 agents
 ```
 
+A session running background agents names them instead, since what is running
+underneath is the whole question for that state:
+
+```
+     ring firmware
+  ~/claude-status-console
+ "align the screen arcs with
+   the physical ring"
+ agents: Explore, code-reviewer     <- from agent_type on SubagentStart/Stop
+      agents running
+   aaaa1111  2m  3 agents
+```
+
 Tap again to dismiss; it also times out after 15 seconds. Touches are resolved
 by angle from the centre rather than by hit-testing the arc widgets, because
 arc bounding boxes all overlap in the middle and would fight over the press.

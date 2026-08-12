@@ -730,7 +730,11 @@ static void drawDetail() {
   //   waiting  -> what it just finished, which is the whole question when an
   //               arc is pulsing at you and you have not read that terminal
   bool running = (st == ST_WORKING || st == ST_BACKGROUND);
-  if (running && s.prompt[0] && strcmp(s.prompt, topic) != 0) {
+  if (st == ST_BACKGROUND && s.agents[0]) {
+    // What is running underneath is the whole question for a background
+    // session, and naming the agents answers it better than counting them.
+    lv_label_set_text_fmt(lblDetailNow, "agents: %s", s.agents);
+  } else if (running && s.prompt[0] && strcmp(s.prompt, topic) != 0) {
     lv_label_set_text_fmt(lblDetailNow, "now: %s", s.prompt);
   } else if (!running && s.reply[0] && strcmp(s.reply, topic) != 0) {
     lv_label_set_text_fmt(lblDetailNow, "said: %s", s.reply);

@@ -455,6 +455,9 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength,
   filter["cwd"] = true;
   filter["user_prompt"] = true;
   filter["last_assistant_message"] = true;
+  // The one genuinely useful thing a subagent reports about itself: what kind
+  // of agent it is. Not its output - see the note below.
+  filter["agent_type"] = true;
 
   BodyReader reader{&client, contentLength, millis() + REQUEST_TIMEOUT_MS};
   JsonDocument doc;
@@ -484,6 +487,7 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength,
   const char *userPrompt = doc["user_prompt"] | (const char *)nullptr;
   const char *assistantMsg =
       doc["last_assistant_message"] | (const char *)nullptr;
+  const char *agentType = doc["agent_type"] | (const char *)nullptr;
 
   Classification c = classify(event, kind);
 
@@ -528,6 +532,11 @@ void HookServer::routeHook(WiFiClient &client, size_t contentLength,
     u.path = shortPath[0] ? shortPath : nullptr;
     u.prompt = firstLine[0] ? firstLine : nullptr;
     u.reply = replyLine[0] ? replyLine : nullptr;
+    // Only from the subagent events. A session started with --agent carries
+    // agent_type on its own events too, and that is the session's identity
+    // rather than something running underneath it.
+    u.agentType = (c.background && agentType && agentType[0]) ? agentType
+                                                              : nullptr;
     u.label = label[0] ? label : nullptr;
 
     _registry.apply(sid, u);
@@ -588,6 +597,7 @@ void HookServer::sendStatus(WiFiClient &client) {
     o["topic"] = s.topic;
     o["prompt"] = s.prompt;
     o["reply"] = s.reply;
+    o["agents"] = s.agents;
     o["state"] = stateName(displayState(s));
     o["raw_state"] = stateName(s.state);
     o["pending"] = s.pending;

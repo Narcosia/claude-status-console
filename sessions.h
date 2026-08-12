@@ -41,6 +41,9 @@ static const size_t PROJECT_LEN = 25;  // cwd basename, truncated
 static const size_t PATH_LEN = 64;     // full cwd, head-truncated if longer
 static const size_t PROMPT_LEN = 96;   // first line of the prompt, truncated
 static const size_t LABEL_LEN = 25;    // explicit name from ?label=
+// Distinct agent_types running this turn, comma-joined. Room for roughly three
+// names; past that the list is more than the card can show anyway.
+static const size_t AGENTS_LEN = 56;
 
 // How long after the last background-work event a session keeps reading as
 // BACKGROUND. A recency window rather than a counter because SubagentStart
@@ -57,6 +60,7 @@ struct Session {
   char prompt[PROMPT_LEN];    // condensed latest prompt - current activity
   char reply[PROMPT_LEN];     // condensed last assistant message - what it did
   char label[LABEL_LEN];      // explicit name from ?label= on the hook URL
+  char agents[AGENTS_LEN];    // agent_types seen since the current turn began
   SessionState state;
   uint32_t order;    // first-seen sequence, so arcs keep a stable position
   uint32_t updated;  // millis() of the last event
@@ -90,6 +94,9 @@ struct SessionUpdate {
   const char *prompt = nullptr;
   const char *reply = nullptr;
   const char *label = nullptr;
+  // One subagent's type, from a SubagentStart/Stop. Added to the session's
+  // list if not already there.
+  const char *agentType = nullptr;
 };
 
 // The state to render, as opposed to the last event received.
