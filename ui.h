@@ -72,3 +72,23 @@ void uiSetNetwork(const char *text);
 // a new session appears; exposed so POST /kawoosh can trigger it too, which is
 // the only way to watch it without waiting for a session to start.
 void uiKawoosh();
+
+// Swap between the status and lights pages. Called from the touch driver,
+// which detects swipes itself - LVGL's gesture engine assumes a continuous
+// stream of coordinates, and this panel reports in bursts around interrupts.
+void uiTogglePage();
+
+// True briefly after a swipe, so a press that was part of a drag does not also
+// fire whatever control it started or ended on.
+bool uiSwipeActive();
+
+// Render every page once at boot, reporting LVGL pool usage around each, and
+// return to the status page.
+//
+// This exists because a page that renders only when a finger lands on it can
+// only be tested by a finger. A shadow on an oversized object exhausted the
+// LVGL pool and hung the device inside LV_ASSERT_MALLOC's while(1) - and
+// compile, flash, hash-verify and an HTTP health probe all passed while it sat
+// one touch away from locking up. This forces the same draw at boot, over
+// serial, where it can be seen without the hardware in hand.
+void uiSelfTest();

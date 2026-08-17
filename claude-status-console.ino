@@ -19,6 +19,7 @@
 #include "config.h"
 #include "motion.h"
 #include "ring.h"
+#include "lights.h"
 #include "sessions.h"
 #include "server.h"
 #include "ui.h"
@@ -102,27 +103,70 @@ static void IRAM_ATTR onTouchIRQ() { touchIRQ = true; }
 static void lvglTouchRead(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   (void)drv;
   static int16_t lastX = 0, lastY = 0;
-  static bool held = false;
 
-  // Poll on the interrupt, and keep polling while a finger is down so the
-  // release is seen. An edge-triggered flag alone can leave LVGL believing a
-  // press is still held.
-  if (touchIRQ || held) {
+  // Touch state from BOTH signals, with a hold-off.
+  //
+  // Neither signal alone is trustworthy on this part:
+  //   - getPoint() only returns coordinates around a report, so a still finger
+  //     produces bursts with quiet gaps between them
+  //   - the INT pin PULSES per report rather than being held low for the
+  //     duration of a touch, so isPressed() flaps during a single press
+  //
+  // Taking either as authoritative gives multiple press/release pairs for one
+  // physical tap - which showed up as a single tap on the power button being
+  // counted as a double tap and flipping the page.
+  //
+  // So: any evidence of contact refreshes a deadline, and the touch is
+  // considered down until that deadline passes. 150 ms is longer than the gap
+  // between reports and far shorter than a deliberate lift.
+  static uint32_t contactUntil = 0;
+  int16_t xs[5], ys[5];
+  bool evidence = touch.isPressed();
+
+  if (evidence || touchIRQ) {
     touchIRQ = false;
-    int16_t xs[5], ys[5];
-    uint8_t n = touch.getPoint(xs, ys, touch.getSupportTouchPoint());
-    if (n > 0) {
+    if (touch.getPoint(xs, ys, touch.getSupportTouchPoint()) > 0) {
       lastX = xs[0];
-      lastY = ys[0];
-      held = true;
-    } else {
-      held = false;
+      lastY = ys[0];  // panel reports Y correctly; see note above
+      evidence = true;
     }
   }
+  if (evidence) contactUntil = millis() + 150;
+  bool pressed = (int32_t)(contactUntil - millis()) > 0;
+
+  // Swipe, as a shortcut alongside the nav pills.
+  //
+  // Computed from where a press started and ended rather than from LVGL's
+  // gesture engine, which infers motion between samples and needs a
+  // continuous stream this panel does not provide. Start-versus-end does not
+  // care about sample rate. The pills remain the reliable route; this is a
+  // convenience on top, and it is only trustworthy now that coordinates are
+  // no longer being mirrored out from under it.
+  static bool prevPressed = false;
+  static int16_t startX = 0, startY = 0;
+  static uint32_t startMs = 0;
+
+  if (pressed && !prevPressed) {
+    startX = lastX;
+    startY = lastY;
+    startMs = millis();
+  } else if (!pressed && prevPressed) {
+    int dx = (int)lastX - startX;
+    int dy = (int)lastY - startY;
+    // Either direction toggles: with two pages, direction carries no meaning.
+    if (abs(dx) > 70 && abs(dx) > abs(dy) * 2 && millis() - startMs < 1200) {
+      uiTogglePage();
+    }
+  }
+  prevPressed = pressed;
+
+  static bool wasDown = false;
+  if (pressed && !wasDown) Serial.printf("touch %d,%d\n", lastX, lastY);
+  wasDown = pressed;
 
   data->point.x = lastX;
   data->point.y = lastY;
-  data->state = held ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
+  data->state = pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
 static void lvglTick(void *arg) {
@@ -226,6 +270,11 @@ static void publishAddress() {
 
 void setup() {
   Serial.begin(115200);
+  // Drop output when no host is reading rather than blocking on it. Without
+  // this, a CDC write stalls until its timeout whenever no monitor is attached,
+  // which is what turned a 5 s profiling print into a visible stutter and a
+  // per-press log into a swipe that would not register.
+  Serial.setTxTimeoutMs(0);
   delay(200);
   Serial.println("\nclaude-status-console");
 
@@ -256,7 +305,19 @@ void setup() {
   } else {
     Serial.printf("touch: %s\n", touch.getModelName());
     touch.setMaxCoordinates(LCD_WIDTH, LCD_HEIGHT);
-    touch.setMirrorXY(true, true);
+    // X mirrored, Y NOT. Waveshare's example uses (true, true); measured on
+    // this panel, that flips the bottom of the screen to the top.
+    //
+    // Verified by pressing three known spots and logging what arrived:
+    //   centre       -> 233,233   (invariant under mirroring - hid the bug)
+    //   bottom-left  -> 119,76    should have been 119,390
+    //   bottom-right -> 347,76    should have been 347,390
+    //
+    // 466 - 390 = 76. Every press on the bottom row was landing near the top,
+    // which is why the power button in the centre worked from the first flash
+    // while nothing in the button row ever did - and why three rewrites of the
+    // touch debounce chased a problem that was never about timing.
+    touch.setMirrorXY(true, true);  // no-op on this driver; see the flip above
     attachInterrupt(TP_INT, onTouchIRQ, FALLING);
   }
 
@@ -297,6 +358,12 @@ void setup() {
   lv_indev_drv_init(&indevDrv);
   indevDrv.type = LV_INDEV_TYPE_POINTER;
   indevDrv.read_cb = lvglTouchRead;
+  // Easier swipes than the defaults (50 px, velocity 3). This panel reports
+  // coordinates in bursts around interrupts rather than continuously, so a
+  // deliberate drag can arrive as only a few samples - not enough travel or
+  // velocity to clear the stock thresholds.
+  indevDrv.gesture_limit = 30;
+  indevDrv.gesture_min_velocity = 2;
   lv_indev_drv_register(&indevDrv);
 
   const esp_timer_create_args_t tickArgs = {.callback = &lvglTick,
@@ -309,7 +376,15 @@ void setup() {
 
   connectWiFi();
   publishAddress();
+  // NTP before the light client: Tuya control payloads carry a timestamp.
+  configTime(0, 0, "pool.ntp.org");
+  lightsBegin(LIGHT_IP, LIGHT_ID, LIGHT_KEY);
+
   server.begin();
+
+  // Draw every page once before anyone touches one. A page that only renders
+  // on demand is a page only a finger can test.
+  uiSelfTest();
 
   Serial.println("setup done");
 }
@@ -319,6 +394,7 @@ void loop() {
   uint32_t now = millis();
 
   server.poll();
+  lightsPoll();
 
   if (now - lastPrune >= 3000) {
     lastPrune = now;

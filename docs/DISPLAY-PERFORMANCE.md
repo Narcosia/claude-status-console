@@ -130,3 +130,65 @@ whenever a new session appears.
   collapse into the horizon (0.80–1.0), shaped in `vortexFront()`
 - During a burst the session arcs freeze, which shrinks the invalidated area to
   the gate alone — the one thing that made the surge smooth
+
+## Shadows: a hard hang, not a slowdown
+
+Adding a 40 px glow to the 260 px power circle **hung the device dead** — no
+panic, no reboot, no serial, no HTTP. It booted, it flashed, it answered a
+health check, and it froze on the first touch that loaded that page.
+
+Three settings in `lv_conf.h` combine to make this fatal rather than merely
+slow:
+
+| Setting | Value | Consequence |
+|---|---|---|
+| `LV_MEM_SIZE` | 48 KB | the whole LVGL pool |
+| `LV_SHADOW_CACHE_SIZE` | 0 | shadow masks are recomputed every draw |
+| `LV_USE_ASSERT_MALLOC` | 1 | and LVGL's assert handler is `while(1);` |
+
+The exact request is in `lv_draw_sw_rect.c`:
+
+```c
+int32_t corner_size = dsc->shadow_width + r_sh;          // r_sh = corner radius
+sh_buf = lv_mem_buf_get(corner_size * corner_size * sizeof(uint16_t));
+```
+
+So it is **(shadow_width + radius)² × 2 bytes**, and the radius dominates. The
+danger is not the blur setting but the *size of the object wearing it*. Measured
+free pool on this device at boot is 31,836 bytes, largest block 31,824:
+
+| Object | radius | shadow | request | vs 31,824 |
+|---|---:|---:|---:|---|
+| nav pill 150×54 | 27 | 24 | 5,202 | fits |
+| swatch 50×50 | 25 | 18 | 3,698 | fits |
+| power circle 150px | 75 | 3 (theme) | 12,168 | fits |
+| power circle 260px | 130 | 3 (theme) | **35,378** | **hangs** |
+| power circle 260px | 130 | 40 (mine) | **57,800** | **hangs** |
+
+A `LV_RADIUS_CIRCLE` object carries a radius of half its width, so a big circle
+is the worst possible shadow target. The ceiling here is `corner_size ≤ 126` —
+a circular button of about **246 px**. The 260 px one missed it by 14 pixels.
+
+Note the third row: `lv_btn_create` inherits `shadow_width LV_DPX(3)` from the
+default theme, so a button has a shadow whether or not you asked for one.
+Removing an explicit shadow does not remove that; it has to be zeroed. That
+mistake cost an extra flash-and-freeze cycle — the first fix looked complete
+and changed nothing.
+
+The allocation fails, `LV_ASSERT_MALLOC` spins in `while(1)`, and the symptom
+is a frozen screen rather than an out-of-memory error.
+
+**Rule:** shadows only on small objects. State on anything large is carried by
+border width and colour, which cost nothing.
+
+Worth noting the failure mode itself: every automated check passed. Compile,
+flash, hash verify, and an HTTP health probe all went green while the device
+was one touch away from locking up. A page that renders only when a finger
+lands on it can only be tested by a finger.
+
+Hence `uiSelfTest()`, called at the end of `setup()`: it loads each page and
+forces a synchronous `lv_refr_now()`, printing LVGL pool figures around each.
+A page that cannot be drawn now hangs at boot, after a line naming it, where
+serial shows it — instead of hanging later under a fingertip with nothing on
+the wire. It is also what turned "shadows are probably too expensive" into the
+arithmetic above.

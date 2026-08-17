@@ -5,7 +5,13 @@
 #include <string.h>
 
 #include "layout.h"
+#include "lights.h"
 #include "motion.h"
+
+static void hideDetail();
+static void onGesture(lv_event_t *e);
+static void onPress(lv_event_t *e);
+static void refreshLightUi();
 
 static const lv_coord_t SCREEN = 466;
 static const lv_coord_t CX = SCREEN / 2;
@@ -59,6 +65,14 @@ static size_t g_spanN = 0;
 static char g_detailSid[SID_LEN] = {0};
 static bool g_detailOpen = false;
 static uint32_t g_detailUntil = 0;
+
+// Two pages: the session status, and the light controls. Separate screen
+// objects rather than a hidden container, so LVGL's own load animation does
+// the sliding and only the visible page is ever rendered.
+static lv_obj_t *scrStatus = nullptr;
+static lv_obj_t *scrLights = nullptr;
+static lv_obj_t *lightPower = nullptr;
+static lv_obj_t *lblLightState = nullptr;
 
 // --- Stargate centre --------------------------------------------------------
 //
@@ -380,6 +394,176 @@ static void drawGate(size_t n, SessionState top, uint32_t phase) {
 void uiKawoosh() {}  // keeps /kawoosh linking when the gate is compiled out
 #endif  // STARGATE
 
+// --- pages -------------------------------------------------------------------
+
+static uint32_t g_swipeAt = 0;
+static uint32_t g_lightsShownAt = 0;
+
+// Back to the agents on its own after a while. The lights page is a thing you
+// visit, not a thing you sit on, and it means the return trip is usually
+// automatic rather than another press.
+static const uint32_t LIGHTS_IDLE_MS = 25000;
+
+bool uiSwipeActive() { return millis() - g_swipeAt < 400; }
+
+void uiTogglePage() {
+  g_swipeAt = millis();
+  g_lightsShownAt = millis();
+  if (lv_scr_act() == scrStatus) {
+    hideDetail();
+    // The page is built before lightsBegin() runs, so its first render says
+    // "no local key" whatever the truth is. Refresh on the way in.
+    refreshLightUi();
+    lv_scr_load(scrLights);
+  } else {
+    lv_scr_load(scrStatus);
+  }
+}
+
+static void onNavTap(lv_event_t *e) {
+  (void)e;
+  Serial.println("hit: nav pill");
+  uiTogglePage();
+}
+
+// A pill at the bottom of each page: large, unmissable, single tap. Styled in
+// the vapor accents the rest of the device uses - a coloured shadow under a
+// thin bright border reads as a glow on an AMOLED, where the black around it
+// is genuinely unlit.
+static lv_obj_t *makeNavPill(lv_obj_t *parent, const char *text,
+                             uint32_t accent) {
+  lv_obj_t *b = lv_btn_create(parent);
+  lv_obj_set_size(b, 150, 54);
+  lv_obj_align(b, LV_ALIGN_CENTER, 0, 150);
+  lv_obj_set_style_radius(b, 27, 0);
+  lv_obj_set_style_bg_color(b, lv_color_hex(0x0a0c10), 0);
+  lv_obj_set_style_bg_opa(b, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(b, 2, 0);
+  lv_obj_set_style_border_color(b, lv_color_hex(accent), 0);
+  lv_obj_set_style_border_opa(b, 220, 0);
+  lv_obj_set_style_shadow_color(b, lv_color_hex(accent), 0);
+  lv_obj_set_style_shadow_width(b, 24, 0);
+  lv_obj_set_style_shadow_opa(b, 90, 0);
+  lv_obj_set_style_shadow_spread(b, 1, 0);
+  lv_obj_add_event_cb(b, onNavTap, LV_EVENT_PRESSED, NULL);
+
+  lv_obj_t *l = lv_label_create(b);
+  lv_label_set_text(l, text);
+  lv_obj_set_style_text_font(l, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(l, lv_color_hex(accent), 0);
+  lv_obj_center(l);
+  return b;
+}
+
+static void onGesture(lv_event_t *e) {
+  (void)e;
+  lv_indev_t *indev = lv_indev_get_act();
+  if (!indev) return;
+  lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+  lv_obj_t *now = lv_scr_act();
+
+  // Left off the status page goes to the lights; right comes back. Only those
+  // two, so a stray vertical drag while reading a card does nothing.
+  (void)now;
+  if (dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT) uiTogglePage();
+}
+
+static void refreshLightUi() {
+  const LightState &s = lightsState();
+  if (lightPower) {
+    lv_obj_set_style_bg_color(
+        lightPower, lv_color_hex(s.power ? 0xffb454 : 0x16181c), 0);
+    // No shadow, ever, on an object this size. LVGL sizes its shadow mask by
+    // (shadow_width + radius) and the cost is quadratic; on a 260px circle
+    // that buffer does not fit in LV_MEM_SIZE, the malloc assert spins in
+    // while(1), and the device hangs dead. The border carries the state
+    // instead. See docs/DISPLAY-PERFORMANCE.md.
+    lv_obj_set_style_border_color(
+        lightPower, lv_color_hex(s.power ? 0xffd08a : 0x3c4043), 0);
+    lv_obj_set_style_border_width(lightPower, s.power ? 6 : 2, 0);
+  }
+  if (lblLightState) {
+    // Dark text on the lit amber face, light text on the unlit one.
+    lv_obj_set_style_text_color(
+        lblLightState, lv_color_hex(s.power ? 0x1a1206 : 0xe8eaed), 0);
+  }
+  if (lblLightState) {
+    // "not configured" and "offline" are different problems with different
+    // fixes, so they get different words.
+    const char *word = !lightsConfigured() ? "no local key"
+                       : s.online          ? (s.power ? "on" : "off")
+                                           : "offline";
+    lv_label_set_text(lblLightState, word);
+  }
+}
+
+// Toggles from OUR state, not LVGL's checked flag. The button used to be
+// CHECKABLE and driven by VALUE_CHANGED, which meant two sources of truth for
+// "is the light on" - and with gestures bubbling through the button they could
+// disagree about whether a press had happened at all.
+static void onPowerToggle(lv_event_t *e) {
+  (void)e;
+  if (uiSwipeActive()) return;
+  bool on = !lightsState().power;
+  lightsSetPower(on);
+  refreshLightUi();
+}
+
+static void buildLightsPage() {
+  scrLights = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scrLights, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(scrLights, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(scrLights, 0, 0);
+  lv_obj_set_style_pad_all(scrLights, 0, 0);
+  lv_obj_clear_flag(scrLights, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_add_event_cb(scrLights, onGesture, LV_EVENT_GESTURE, NULL);
+
+  lv_obj_t *title = lv_label_create(scrLights);
+  lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_text_color(title, lv_color_hex(0x9aa0a6), 0);
+  lv_label_set_text(title, "LIGHTS");
+  lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 56);
+
+  // One control. There is deliberately no brightness ring: dp 22 does not
+  // exist on this unit, so brightness has to travel in dp 24, and writing
+  // dp 24 stops the light's scene playback. A dim control that kills the
+  // animation is worse than no dim control.
+  //
+  // 200px, nudged up by 8. The nav pill's top edge is 123px above centre
+  // (aligned at +150, half-height 27), so a circle bigger than ~222 across
+  // runs into it.
+  lightPower = lv_btn_create(scrLights);
+  lv_obj_set_size(lightPower, 200, 200);
+  lv_obj_align(lightPower, LV_ALIGN_CENTER, 0, -8);
+  lv_obj_set_style_radius(lightPower, LV_RADIUS_CIRCLE, 0);
+  lv_obj_set_style_bg_color(lightPower, lv_color_hex(0x16181c), 0);
+  lv_obj_set_style_border_width(lightPower, 2, 0);
+  lv_obj_set_style_border_color(lightPower, lv_color_hex(0x3c4043), 0);
+  // The default theme gives every button shadow_width LV_DPX(3). Harmless on a
+  // small control, fatal here: LVGL's shadow mask is sized by
+  // (shadow_width + radius) and costs its square, so on a radius-130 circle it
+  // asks for tens of KB from a 48 KB pool, fails, and spins in the malloc
+  // assert. Removing our own shadow was not enough - the inherited one has to
+  // go too.
+  lv_obj_set_style_shadow_width(lightPower, 0, 0);
+  lv_obj_set_style_shadow_opa(lightPower, LV_OPA_TRANSP, 0);
+  lv_obj_add_flag(lightPower, LV_OBJ_FLAG_EVENT_BUBBLE);
+  // PRESSED, not CLICKED. CLICKED requires the release to land inside the
+  // object with no scroll in between, and this panel's coordinates jitter
+  // enough under a fingertip that the click was being cancelled.
+  lv_obj_add_event_cb(lightPower, onPowerToggle, LV_EVENT_PRESSED, NULL);
+
+  lblLightState = lv_label_create(lightPower);
+  lv_obj_set_style_text_font(lblLightState, &lv_font_montserrat_20, 0);
+  lv_obj_center(lblLightState);
+  lv_label_set_text(lblLightState, "off");
+
+  makeNavPill(scrLights, "AGENTS", 0x00DCFF);
+
+  refreshLightUi();
+}
+
+
 static void hideDetail() {
   g_detailOpen = false;
   g_detailSid[0] = '\0';
@@ -395,7 +579,15 @@ static void showDetail(const Session &s) {
 }
 
 static void onPress(lv_event_t *e) {
-  (void)e;
+  // Only presses on the page background resolve to an arc. Without this, a tap
+  // on any control sitting over the band - the nav pill, for instance - also
+  // opened a session card, because this handler only looked at the angle.
+  if (lv_event_get_target(e) != scrStatus) {
+    Serial.println("hit: a child widget (not the page)");
+    return;
+  }
+  Serial.println("hit: page background -> arc hit-test");
+
   lv_indev_t *indev = lv_indev_get_act();
   if (!indev) return;
   lv_point_t p;
@@ -434,13 +626,19 @@ void uiInit(const Palette &palette, uint16_t ledCount) {
   g_pal = &palette;
   g_leds = ledCount ? ledCount : 24;
 
-  lv_obj_t *scr = lv_scr_act();
+  // Its own screen object rather than the default one, so a second page can
+  // exist beside it and swipes can move between them.
+  scrStatus = lv_obj_create(NULL);
+  lv_obj_t *scr = scrStatus;
   // Black is free on an AMOLED - unlit pixels draw nothing - so the arcs sit
   // on true black rather than a dark grey panel.
   lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+  lv_obj_set_style_border_width(scr, 0, 0);
+  lv_obj_set_style_pad_all(scr, 0, 0);
   lv_obj_clear_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
   lv_obj_add_event_cb(scr, onPress, LV_EVENT_PRESSED, NULL);
+  lv_obj_add_event_cb(scr, onGesture, LV_EVENT_GESTURE, NULL);
 
   for (size_t i = 0; i < MAX_SESSIONS; i++) {
     arcBase[i] = makeArc(scr);
@@ -545,6 +743,39 @@ void uiInit(const Palette &palette, uint16_t ledCount) {
   lv_obj_set_style_text_color(lblDetailMeta, lv_color_hex(0x9aa0a6), 0);
   lv_obj_set_style_text_align(lblDetailMeta, LV_TEXT_ALIGN_CENTER, 0);
   lv_obj_align(lblDetailMeta, LV_ALIGN_BOTTOM_MID, 0, -8);
+
+  makeNavPill(scrStatus, "LIGHTS", 0xFF00A0);
+
+  buildLightsPage();
+  refreshLightUi();
+  lv_scr_load(scrStatus);
+}
+
+static void memReport(const char *stage) {
+  lv_mem_monitor_t m;
+  lv_mem_monitor(&m);
+  Serial.printf("lvgl mem %-14s free=%u used=%u%% frag=%u%% largest=%u\n",
+                stage, (unsigned)m.free_size, (unsigned)m.used_pct,
+                (unsigned)m.frag_pct, (unsigned)m.free_biggest_size);
+}
+
+void uiSelfTest() {
+  memReport("boot");
+
+  // lv_refr_now() forces the draw synchronously, so if a page cannot be
+  // rendered this hangs HERE, after a print naming it, instead of hanging
+  // later under a fingertip with nothing on the wire.
+  Serial.println("selftest: rendering lights page");
+  lv_scr_load(scrLights);
+  lv_refr_now(NULL);
+  memReport("lights drawn");
+
+  Serial.println("selftest: rendering status page");
+  lv_scr_load(scrStatus);
+  lv_refr_now(NULL);
+  memReport("status drawn");
+
+  Serial.println("selftest: both pages rendered ok");
 }
 
 void uiSetNetwork(const char *text) {
@@ -773,6 +1004,14 @@ void uiUpdate(const Session *sessions, size_t n, uint32_t phase,
   // trades frame rate for an even one, which is the thing the eye notices.
   static uint8_t tick = 0;
   tick++;
+
+  // Nothing on the status page is visible while the lights page is up, and
+  // restyling hidden objects still costs LVGL invalidation work. The snapshot
+  // above is kept current so the page is right the instant it slides back.
+  if (lv_scr_act() != scrStatus) {
+    if (millis() - g_lightsShownAt > LIGHTS_IDLE_MS) uiTogglePage();
+    return;
+  }
 
 #if STARGATE
   bool bursting = g_bursting;

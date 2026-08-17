@@ -336,6 +336,99 @@ curl -sX POST http://192.168.1.200/hook -H 'Content-Type: application/json' \
 curl -sX POST http://192.168.1.200/clear      # forget everything
 ```
 
+## Smart lights
+
+A second page — reached by the pill at the bottom, or a swipe — carries power
+and brightness, driving a Tuya light bar over the LAN with no cloud and no hub.
+
+### The device
+
+A "Smart Ape Ambient Light" — Tuya category `dd`, protocol **3.3**. The client
+in `lights.cpp` speaks it directly: AES-128-ECB under the device's local key,
+CRC32, and the `55AA … AA55` frame. No session negotiation, unlike 3.4.
+
+One asymmetry is worth knowing because it fails silently: **CONTROL payloads
+carry a 15-byte `"3.3"` version header before the ciphertext, DP_QUERY payloads
+do not.** Get it wrong and the device simply ignores you.
+
+Every socket operation runs on its own FreeRTOS task behind a queue, so a slow
+or absent light can never stall the render loop.
+
+### Datapoints, as measured
+
+The cloud DP spec and the device disagree, so these were established by
+poking the real unit:
+
+| DP | Spec says | Actually |
+|---:|---|---|
+| 20 | `switch_led` bool | **works** |
+| 21 | `work_mode` enum | **rejects writes** — stuck in `scene` |
+| 22 | brightness | **absent on this unit** |
+| 24 | `colour_data` HSV hex | **works, and overrides scene playback** |
+
+So dp 24 is the entire control surface. Brightness rides in its value field,
+because dp 22 does not exist here — the client converts RGB→HSV and packs
+brightness into `v`.
+
+### Scenes cannot be saved, only resumed
+
+There is no `scene_data` datapoint on this product, and its animated scenes are
+played internally. Watching dp 24 for twenty seconds while a scene ran returned
+**one unchanging value** — the animation is invisible from the LAN, so there is
+nothing to capture.
+
+But `work_mode = "scene"` *re-triggers* whichever scene the app last selected,
+so the console can always hand control back to the light's own engine.
+
+### Why the page is only power and brightness
+
+Colour swatches, two NVS preset slots and a scene button were all built and all
+worked at the protocol level. They were removed anyway: 50 px targets and a
+hold-to-save gesture are the wrong interaction for this panel, which needs
+large targets and a single unambiguous tap. Two controls that always work beat
+six that need a careful finger.
+
+`lightsSetColour()`, `lightsScene()` and the preset functions remain in
+`lights.cpp` — tested, and the place to start from if the page ever grows a
+better control for them. The lesson is about touch targets, not the transport.
+
+### Touch: what was actually true
+
+Getting this page usable cost most of a day, and the bug was a **double
+correction of my own making**, not the panel.
+
+`setMirrorXY(true, true)` **is** applied by the driver — grepping only
+`TouchDrvCST92xx.cpp` for `_mirrorY` and finding nothing was misleading, since
+the mirroring happens further up the class hierarchy. Coordinates therefore
+arrive already matching the display. Adding a `466 - y` flip on top sent every
+press to its mirror image, so **nothing below the middle of the screen could
+be hit** — while the power button at dead centre kept working, because a
+Y-flip is invisible there. That one working control is why four rounds of work
+went into debounce timing, gesture thresholds and event routing instead.
+
+What is true, and worth keeping:
+
+- **Use both touch signals with a hold-off.** `getPoint()` only returns
+  coordinates around a report and the INT pin pulses per report rather than
+  being held low, so neither alone is authoritative. Any evidence of contact
+  refreshes a 150 ms deadline; the touch is down until it passes. Taking either
+  signal alone gives several press/release pairs per physical tap.
+- **Navigate with tap targets, not gestures.** Swipe and double-tap both need
+  motion or timing reconstructed from a bursty signal. A single contact event
+  is the one thing this panel reports cleanly, so each page carries a pill.
+- **`Serial.setTxTimeoutMs(0)`.** USB CDC writes block until timeout when no
+  host is reading, which turned a 5 s profiling print into a visible stutter.
+  Dropping output is the right trade for a device with no UART bridge — but
+  note a capture must assert **DTR** or the device drops everything and the log
+  looks empty.
+- **A screen-level press handler must check its target.** `lv_event_get_target`
+  ≠ the screen means a child was pressed; without that check, the arc
+  hit-testing fired for taps on buttons too.
+
+That still leaves three places the vendor material disagrees with this board —
+the H2 pin map, `I2S_MCK_IO`, and an `isPressed()` that assumes a level signal
+the controller does not provide. Measure, do not assume.
+
 ## Multiple machines
 
 Hooks are per-machine configuration — there is no central registry, so **every

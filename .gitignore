@@ -1,3 +1,6 @@
 config.h
 build/
+# arduino-cli copies the whole sketch here, config.h and all, so this must
+# never be committed - it contains the wifi password and the Tuya local key.
+build-diag/
 firmware-backup/*.bin

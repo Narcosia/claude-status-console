@@ -69,3 +69,11 @@
 // "vapor" (all pink and cyan - prettier, less legible). Drives both the ring
 // and the screen, so they always agree.
 #define THEME "vapor"
+
+// --- Smart lights -----------------------------------------------------------
+// Tuya device on the LAN. Find the IP and device id with `tinytuya scan`; the
+// local key comes from a Tuya IoT cloud project linked to your Smart Life
+// account. Leave LIGHT_KEY as nullptr to build the UI without the transport.
+#define LIGHT_IP  "192.168.1.50"
+#define LIGHT_ID  "your-device-id"
+#define LIGHT_KEY nullptr
