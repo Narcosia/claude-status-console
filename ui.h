@@ -57,6 +57,15 @@
 #define STARGATE 0
 #endif
 
+// Per-touch logging: the raw coordinate, and which object claimed it. This is
+// what established that the panel is not Y-inverted, so it is worth keeping -
+// but it prints on every press, and writing to a USB CDC port with no reader
+// attached has its own history on this board. Off unless something is being
+// chased.
+#ifndef TOUCH_DEBUG
+#define TOUCH_DEBUG 0
+#endif
+
 void uiInit(const Palette &palette, uint16_t ledCount);
 
 // Draw one frame from a session snapshot. `phase` is the same counter the ring

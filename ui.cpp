@@ -422,7 +422,9 @@ void uiTogglePage() {
 
 static void onNavTap(lv_event_t *e) {
   (void)e;
+#if TOUCH_DEBUG
   Serial.println("hit: nav pill");
+#endif
   uiTogglePage();
 }
 
@@ -583,10 +585,14 @@ static void onPress(lv_event_t *e) {
   // on any control sitting over the band - the nav pill, for instance - also
   // opened a session card, because this handler only looked at the angle.
   if (lv_event_get_target(e) != scrStatus) {
+#if TOUCH_DEBUG
     Serial.println("hit: a child widget (not the page)");
+#endif
     return;
   }
+#if TOUCH_DEBUG
   Serial.println("hit: page background -> arc hit-test");
+#endif
 
   lv_indev_t *indev = lv_indev_get_act();
   if (!indev) return;

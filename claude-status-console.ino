@@ -161,7 +161,9 @@ static void lvglTouchRead(lv_indev_drv_t *drv, lv_indev_data_t *data) {
   prevPressed = pressed;
 
   static bool wasDown = false;
+#if TOUCH_DEBUG
   if (pressed && !wasDown) Serial.printf("touch %d,%d\n", lastX, lastY);
+#endif
   wasDown = pressed;
 
   data->point.x = lastX;
