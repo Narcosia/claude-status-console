@@ -97,6 +97,11 @@ the two real causes, the optimisation that made no difference at all, and what
 to try before turning it back on. Worth reading before touching the render
 path — the baseline was 11 fps long before any of this was added.
 
+[docs/LESSONS.md](docs/LESSONS.md) is the shorter, more useful read: the wrong
+turns, and what each one cost. Most of them were not embedded problems — they
+were diagnostics that returned confident answers about the wrong thing.
+[tools/](tools/) holds the instruments that came out of it.
+
 ### Naming sessions
 
 Directory names are often too generic to tell sessions apart — three sessions
@@ -365,6 +370,9 @@ poking the real unit:
 | 21 | `work_mode` enum | **rejects writes** — stuck in `scene` |
 | 22 | brightness | **absent on this unit** |
 | 24 | `colour_data` HSV hex | **works, and overrides scene playback** |
+| 26 | not in the spec | present, reads 0, unused here |
+
+Reproduce any of this with `./tools/tuya-probe.py query`.
 
 So dp 24 is the entire control surface. Brightness rides in its value field,
 because dp 22 does not exist here — the client converts RGB→HSV and packs

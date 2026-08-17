@@ -4,3 +4,4 @@ build/
 # never be committed - it contains the wifi password and the Tuya local key.
 build-diag/
 firmware-backup/*.bin
+__pycache__/
