@@ -417,6 +417,28 @@ void HookServer::service(WiFiClient &client) {
     g_ringOverride = RING_OVERRIDE_ZERO;
     g_ringTestUntil = millis() + 180000;
     respond(client, 200, "zero marker: 180s");
+  } else if (isPost && strncmp(path, "/pinhigh", 8) == 0) {
+    // Which physical hole is a given GPIO? Holds the pin at a steady 3.3 V so
+    // a multimeter can find it - a WS2812B data stream averages ~0.05 V and
+    // tells a meter nothing.
+    //
+    // Restricted to the three expansion GPIOs on purpose. The display and
+    // touch lines are on this same chip and driving one of those high by a
+    // typo'd query parameter would be a genuinely bad afternoon.
+    char g[8];
+    queryParam(query, "gpio", g, sizeof(g));
+    uint8_t pin = (uint8_t)atoi(g);
+    if (pin != 16 && pin != 17 && pin != 18) {
+      respond(client, 400, "gpio must be 16, 17 or 18");
+    } else {
+      g_ringHighPin = pin;
+      g_ringOverride = RING_OVERRIDE_HIGH;
+      g_ringTestUntil = millis() + 120000;
+      char msg[72];
+      snprintf(msg, sizeof(msg),
+               "GPIO%u held HIGH for 120s - probe for 3.3V", pin);
+      respond(client, 200, msg);
+    }
   } else if (isPost && strncmp(path, "/ringtest", 9) == 0) {
     g_ringOverride = RING_OVERRIDE_TEST;
     g_ringTestUntil = millis() + 15000;

@@ -218,48 +218,85 @@ signal. The window is cleared on `UserPromptSubmit`.
 
 The board's 8-pin 2.54 mm header (`H2`) is the only exposed GPIO:
 
-| H2 pin | Signal | Ring |
-|---:|---|---|
-| 1 | VBUS | `VCC` |
-| 2 | GND | `Gnd` |
-| 3 | 3V3 | — |
-| 4 | GPIO44 / U0RXD | — |
-| 5 | GPIO43 / U0TXD | — |
-| 6 | GPIO16 | — |
-| 7 | GPIO17 | — |
-| 8 | **GPIO18** | `Din` |
+| H2 pin | Signal | Ring | In line |
+|---:|---|---|---|
+| 1 | VBUS (5 V) | `VCC` | **1N5822 Schottky**, band toward the ring |
+| 2 | GND | `Gnd` | — |
+| 3 | 3V3 | — | |
+| 4 | UART | — | |
+| 5 | UART | — | |
+| 6 | GPIO16 | — | |
+| 7 | GPIO17 | — | |
+| 8 | **GPIO18** | `Din` | **330 Ω** |
 
-**That GPIO order is measured, and contradicts `HARDWARE_REFERENCE.md`**, which
-lists pins 6/7/8 as GPIO17/GPIO18/**GPIO16**. The non-sequential ordering in the
-official table is the tell — the pins run 16, 17, 18 across holes 6, 7, 8, so
-the last hole is GPIO18.
+```
+  H2 pin 1  (5V) ──▶|──────────────  VCC ┐
+                  1N5822                  │
+  H2 pin 2  (GND) ───────────────── Gnd  ├── ring, "Din" pad group
+                                          │
+  H2 pin 8 (GPIO18) ───[ 330Ω ]──── Din  ┘
+```
 
-Established with `POST /ringscan`, which drives each candidate pin in its own
-colour and lets the ring identify itself. If a ring in the last hole lights
-**blue**, the mapping above holds; **red** would mean the documented mapping is
-right for your revision. Check rather than assume — this is the second place
-this board's documentation disagrees with its hardware, after `I2S_MCK_IO`.
+**Use the `Din` group, not `Dout`.** The ring exposes two triplets — `Dout /
+VCC / Gnd` and `Din / VCC / Gnd`. `Dout` is for daisy-chaining and drives
+nothing; wired there, the ring is powered, silent and looks dead.
 
-Leave the ring's `Dout` triplet unconnected — it is only for daisy-chaining.
+**Both series parts are protection, learned the hard way** — see
+[docs/LESSONS.md](docs/LESSONS.md).
+
+- **330 Ω on data** is the important one. If `VCC` and `Gnd` are ever swapped,
+  the ring's internal ground sits at +5 V while the data line stays referenced
+  to the board's ground, and current pours through the first LED's input clamp
+  and back into the GPIO. The resistor limits that to ~15 mA, which both parts
+  survive. Onboard reverse-polarity protection does *not* cover this path: it
+  guards the rails, and the current never uses the rails.
+- **1N5822 on VCC** blocks reverse current outright, and its ~0.35 V drop is a
+  bonus — at 4.65 V the WS2812B logic threshold falls to 3.26 V, just under the
+  ESP32's 3.3 V output, fixing a margin this board was always slightly outside.
 
 The header is **female**, so this needs male-ended jumper wires — the opposite
 of what the old Keyestudio board took.
 
+Use **three different wire colours**. Three identical red ones is what allowed
+the swap that destroyed the first ring.
+
 ### Finding pin 1
 
-The unit is enclosed, so the `H2` silkscreen is not visible. Identify the end
-electrically rather than by counting from a guess, with the board USB-powered
-and the ring not yet connected:
+**The legend is printed on the back label**, under the feature icons:
 
-| Probe | Expect |
-|---|---|
-| pin 1 → pin 2 | ~5 V (VBUS) |
-| pin 3 → pin 2 | 3.3 V |
-| pin 8 → pin 2 | ~0 V, floating (GPIO16) |
+```
+18   17   16   RX   TX   3.3V   G   5V
+```
 
-If the 5 V and 3.3 V readings land on pins 8 and 6 instead, you are counting
-from the wrong end and the row is reversed. Getting this wrong puts 5 V into a
-GPIO that is not 5 V tolerant, so it is worth the two minutes.
+Read from the `5V` end that is pins 1–8 in the table above, and it agrees with
+the measured order — the first time this board's documentation and its hardware
+have agreed about anything. Trust it, then confirm it, because getting this
+backwards is what destroyed the first ring.
+
+**Which hole is ground?** Not a voltage question. A meter across two holes
+reads 5 V whichever way round the probes go — it says they differ, not which is
+which. Use **continuity**, with USB unplugged:
+
+- One probe on the **USB connector shell** (chassis ground), the other on each
+  candidate hole
+- Exactly one beeps. That is `GND`. If neither does, stop — the shell is not
+  tied to ground on your unit and you need a different reference
+
+Then re-plug and cross-check with the black probe **on the shell**, so the sign
+means something: `+5.00 V` is pin 1, `0.00 V` is pin 2.
+
+**Which hole is GPIO18?** `POST /pinhigh?gpio=18` holds it at a steady 3.3 V
+for 120 seconds; probe holes 6, 7 and 8 and exactly one reads it. Accepts 16,
+17 or 18 only.
+
+This exists because the other tests cannot answer it. `/ringscan` needs a
+working ring, and a WS2812B data stream averages ~0.05 V — unreadable on a
+multimeter. It also doubles as a health check on the pin itself: if GPIO18
+cannot be driven high, put `Din` on 16 or 17 and change `RING_PIN` in
+`board.h`.
+
+Mark pin 1 physically once you have it — a scratch or a dab of paint. This
+should never need re-deriving.
 
 **Watch out for Waveshare's own `pin_config.h`**: it defines `I2S_MCK_IO 16`,
 which contradicts both the schematic and the maintained BSP — audio MCLK is
@@ -268,9 +305,11 @@ that is the one that matters here, so `board.h` in this repo is self-contained
 rather than including theirs. Nothing in this firmware touches the audio path.
 
 **Levels.** The header is 3.3 V and *not* 5 V tolerant. The ESP32-S3 drives ring
-data at 3.3 V while a WS2812B at 5 V wants ≥3.5 V for a logic high. It works,
-as it did on the old board, but flickering or a misbehaving first LED points at
-that margin rather than at the code.
+data at 3.3 V while a WS2812B at 5 V wants ≥3.5 V for a logic high — outside
+spec, and it ran that way for weeks regardless. The 1N5822 brings the ring to
+~4.65 V and the threshold to 3.26 V, which puts it inside spec for the first
+time. Flickering or a misbehaving first LED points at that margin rather than
+at the code.
 
 **Power.** 24 WS2812Bs at full white draw ~1.4 A, and here they share VBUS with
 an AMOLED and a WiFi radio. `RING_BRIGHTNESS` defaults to 24 (~9%), keeping the
@@ -278,8 +317,9 @@ whole ring near 150 mA at pulse peak. Raise it only with a dedicated 5 V supply
 whose ground is tied to the board's.
 
 **Aligning the arcs.** `RING_ZERO_DEG` in `ui.h` is the angle of LED 0, in LVGL
-degrees (0 = 3 o'clock, clockwise). It defaults to 270, putting LED 0 at 12
-o'clock. Set it once after mounting so a session's arc on screen points at its
+degrees (0 = 3 o'clock, clockwise). It is **90**, putting LED 0 at 6 o'clock —
+the wire entry on this ring. `POST /ringzero` marks LED 0 with a direction
+trail; set this once after mounting so a session's arc on screen points at its
 arc on the ring.
 
 ## Setup

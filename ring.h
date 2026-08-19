@@ -77,8 +77,17 @@ enum RingOverride : uint8_t {
   RING_OVERRIDE_TEST = 0,  // solid colour cycle - "is anything alive"
   RING_OVERRIDE_ZERO = 1,  // index marker - "where is LED 0, and which way"
   RING_OVERRIDE_SCAN = 2,  // pin scan - "which GPIO is Din actually in"
+  RING_OVERRIDE_HIGH = 3,  // hold one pin high - "which HOLE is that GPIO in"
 };
 extern volatile uint8_t g_ringOverride;
+
+// Which GPIO RING_OVERRIDE_HIGH holds high. Set by POST /pinhigh?gpio=NN.
+//
+// The scan answers "which pin is the ring on" by lighting it. This answers the
+// question you have when there is no ring to light: which physical hole is a
+// given GPIO? A WS2812B data stream averages ~0.05 V and is unreadable on a
+// multimeter; a pin held steady at 3.3 V is not.
+extern volatile uint8_t g_ringHighPin;
 
 class Ring {
  public:
@@ -115,6 +124,16 @@ class Ring {
   // ring without revealing which pin did it, which is precisely the question
   // when the ring works under one firmware and not another.
   void pinScan(uint32_t phase);
+
+  // Hold one GPIO steadily high, releasing the RMT channel first so the two
+  // are not fighting over the pad. Measure the holes with a multimeter: the
+  // one reading 3.3 V is that GPIO.
+  //
+  // Idempotent - safe to call every frame while the override is active.
+  void holdPinHigh(uint8_t pin);
+
+  // Give the pad back to the RMT driver after a hold.
+  void releasePin();
 
  private:
   void paintComet(uint16_t lo, uint16_t hi, RGB c, uint32_t phase,

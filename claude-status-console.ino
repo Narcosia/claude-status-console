@@ -196,6 +196,8 @@ static void ringTask(void *arg) {
         ring.zeroMarker();
       } else if (g_ringOverride == RING_OVERRIDE_SCAN) {
         ring.pinScan(phase);
+      } else if (g_ringOverride == RING_OVERRIDE_HIGH) {
+        ring.holdPinHigh(g_ringHighPin);
       } else {
         ring.testPattern(phase);
       }

@@ -37,6 +37,7 @@ const Palette PALETTE_VAPOR = {{
 
 volatile uint32_t g_ringTestUntil = 0;
 volatile uint8_t g_ringOverride = RING_OVERRIDE_TEST;
+volatile uint8_t g_ringHighPin = 16;
 
 // WS2812B bit timing, in ticks of the 10 MHz RMT clock set in begin(), so one
 // tick is 100 ns. Spec allows +/-150 ns on each, and a bit period of ~1.25 us.
@@ -174,6 +175,25 @@ void Ring::pinScan(uint32_t phase) {
 
   for (uint16_t i = 0; i < _n; i++) set(i, COLS[idx], 60);
   transmit(PINS[idx]);
+}
+
+void Ring::holdPinHigh(uint8_t pin) {
+  static uint8_t held = 0xFF;
+  if (held == pin) return;          // already driving it; nothing to redo
+
+  // The RMT owns the pad until it is deinited. Without this the two fight and
+  // the level a meter sees depends on which spoke last.
+  releasePin();
+  pinMode(pin, OUTPUT);
+  digitalWrite(pin, HIGH);
+  held = pin;
+  Serial.printf("pin hold: GPIO%u driven HIGH (3.3 V) - probe the holes\n", pin);
+}
+
+void Ring::releasePin() {
+  if (_activePin == 0xFF) return;
+  rmtDeinit(_activePin);
+  _activePin = 0xFF;
 }
 
 void Ring::clear() {
