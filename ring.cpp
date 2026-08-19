@@ -156,9 +156,12 @@ void Ring::transmit(uint8_t pin) {
 void Ring::pinScan(uint32_t phase) {
   static const uint8_t PINS[3] = {16, 17, 18};
   static const RGB COLS[3] = {{255, 0, 0}, {0, 255, 0}, {0, 0, 255}};
-  static const char *NAMES[3] = {"GPIO16 (H2 pin 8) RED",
-                                 "GPIO17 (H2 pin 6) GREEN",
-                                 "GPIO18 (H2 pin 7) BLUE"};
+  // Hole numbers per board.h, which is measured. These strings used to carry
+  // Waveshare's ordering (8/6/7) and so contradicted the very finding this
+  // scan produced - a diagnostic printing a map it had itself disproved.
+  static const char *NAMES[3] = {"GPIO16 (H2 pin 6) RED",
+                                 "GPIO17 (H2 pin 7) GREEN",
+                                 "GPIO18 (H2 pin 8) BLUE"};
 
   // ~2 s per pin at 33 fps.
   uint8_t idx = (phase / 66) % 3;
