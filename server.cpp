@@ -417,6 +417,16 @@ void HookServer::service(WiFiClient &client) {
     g_ringOverride = RING_OVERRIDE_ZERO;
     g_ringTestUntil = millis() + 180000;
     respond(client, 200, "zero marker: 180s");
+  } else if (isPost && strncmp(path, "/ringalign", 10) == 0) {
+    // Live alignment. Sweep this while watching the gate until the screen
+    // arcs sit over the LEDs they represent, then bake the winner into
+    // RING_ZERO_DEG.
+    char d[8];
+    queryParam(query, "deg", d, sizeof(d));
+    if (d[0]) uiSetZeroDeg((int16_t)atoi(d));
+    char msg[48];
+    snprintf(msg, sizeof(msg), "zero angle = %d deg", (int)uiZeroDeg());
+    respond(client, 200, msg);
   } else if (isPost && strncmp(path, "/pinhigh", 8) == 0) {
     // Which physical hole is a given GPIO? Holds the pin at a steady 3.3 V so
     // a multimeter can find it - a WS2812B data stream averages ~0.05 V and

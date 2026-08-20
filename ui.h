@@ -26,9 +26,20 @@
 // Measured with POST /ringzero, which marks LED 0 in white with a fading trail
 // showing the direction of increasing index.
 //
-// This ring: LED 0 sits at the wire entry, at 6 o'clock.
+// This build: 350, found by sweeping POST /ringalign with four staged sessions
+// on screen and reading the result off the gate.
+//
+// It is not a clean number and should not be: it absorbs three things at once
+// - where LED 0 physically sits, how the ring is seated in the Stargate
+// enclosure, and SCREEN_ROTATION, since the display is rotated in software
+// while the ring is not. Deriving it from first principles would mean getting
+// all three right simultaneously; measuring it took one sweep.
+//
+// Re-tune it with /ringalign after any change to SCREEN_ROTATION or the
+// mounting. Stage sessions first: a lone session's arc spans the full circle
+// and looks identical at every angle, so there is nothing to align against.
 #ifndef RING_ZERO_DEG
-#define RING_ZERO_DEG 90
+#define RING_ZERO_DEG 350
 #endif
 
 // 1 if LED indices increase clockwise when viewed from the front, 0 if they
@@ -101,3 +112,13 @@ bool uiSwipeActive();
 // one touch away from locking up. This forces the same draw at boot, over
 // serial, where it can be seen without the hardware in hand.
 void uiSelfTest();
+
+// Where LED 0's arc is drawn, in LVGL degrees. Live-tunable with
+// POST /ringalign?deg=NNN so the screen arcs can be lined up with the physical
+// ring by eye, then written back into RING_ZERO_DEG once settled.
+//
+// This has to absorb SCREEN_ROTATION as well as the mounting: the display is
+// rotated in software and the LED ring is not, so rotating the screen moves
+// the arcs away from the LEDs they are supposed to point at.
+void uiSetZeroDeg(int16_t deg);
+int16_t uiZeroDeg();

@@ -37,6 +37,18 @@
 #define UI_PROFILE 0
 #endif
 
+// Screen orientation, in degrees clockwise: 0, 90, 180 or 270.
+//
+// Done in software - see the note where the display driver is registered. Both
+// the rendering and the touch mapping key off this one value; change it here
+// and they stay in agreement.
+// 90 for this enclosure, established by looking at it rather than by deriving
+// it: the panel's scan order and the gate's mounting both have a say, and the
+// two together are not worth reasoning about from first principles.
+#ifndef SCREEN_ROTATION
+#define SCREEN_ROTATION 90
+#endif
+
 // --- display ----------------------------------------------------------------
 
 static Arduino_DataBus *bus = new Arduino_ESP32QSPI(
@@ -73,15 +85,68 @@ static volatile uint32_t g_phase = 0;
 static volatile uint32_t g_flushUs = 0;
 static volatile uint32_t g_flushPx = 0;
 
+#if SCREEN_ROTATION != 0
+// Scratch for the transpose. One flush area's worth, allocated once.
+static lv_color_t *rotBuf = nullptr;
+#endif
+
 static void lvglFlush(lv_disp_drv_t *disp, const lv_area_t *area,
                       lv_color_t *pixels) {
   uint32_t t0 = micros();
-  uint32_t w = area->x2 - area->x1 + 1;
-  uint32_t h = area->y2 - area->y1 + 1;
+  int32_t x1 = area->x1, y1 = area->y1, x2 = area->x2, y2 = area->y2;
+  uint32_t w = x2 - x1 + 1;
+  uint32_t h = y2 - y1 + 1;
+  lv_color_t *out = pixels;
+  int32_t ox = x1, oy = y1;
+  uint32_t ow = w, oh = h;
+
+#if SCREEN_ROTATION != 0
+  // Rotate here rather than with LVGL's sw_rotate.
+  //
+  // LVGL rotates in chunks of `LV_DISP_ROT_MAX_BUF / area_width` rows and
+  // gives each chunk its own flush window, at whatever parity the arithmetic
+  // lands on. The CO5300 addresses pixels in PAIRS - which is the entire
+  // reason lvglRounder() exists - so every chunk that starts on an odd column
+  // is written one pixel out. On the status page, with its many narrow arcs,
+  // that is a screenful of smeared garbage; on the lights page, with a few
+  // wide areas, it mostly happens to line up.
+  //
+  // Rotating the whole area in one go keeps the rounder's guarantee: it makes
+  // both axes even-start and odd-end, and every mapping below carries that
+  // through to the panel.
+  const int32_t SIDE = LCD_WIDTH;  // square panel, so no resolution swap
+  if (rotBuf) {
+    out = rotBuf;
+#if SCREEN_ROTATION == 90
+    ox = SIDE - 1 - y2;
+    oy = x1;
+    ow = h;
+    oh = w;
+    for (uint32_t sy = 0; sy < h; sy++)
+      for (uint32_t sx = 0; sx < w; sx++)
+        out[sx * h + (h - 1 - sy)] = pixels[sy * w + sx];
+#elif SCREEN_ROTATION == 180
+    ox = SIDE - 1 - x2;
+    oy = SIDE - 1 - y2;
+    for (uint32_t sy = 0; sy < h; sy++)
+      for (uint32_t sx = 0; sx < w; sx++)
+        out[(h - 1 - sy) * w + (w - 1 - sx)] = pixels[sy * w + sx];
+#else  // 270
+    ox = y1;
+    oy = SIDE - 1 - x2;
+    ow = h;
+    oh = w;
+    for (uint32_t sy = 0; sy < h; sy++)
+      for (uint32_t sx = 0; sx < w; sx++)
+        out[(w - 1 - sx) * h + sy] = pixels[sy * w + sx];
+#endif
+  }
+#endif
+
 #if (LV_COLOR_16_SWAP != 0)
-  gfx->draw16bitBeRGBBitmap(area->x1, area->y1, (uint16_t *)&pixels->full, w, h);
+  gfx->draw16bitBeRGBBitmap(ox, oy, (uint16_t *)&out->full, ow, oh);
 #else
-  gfx->draw16bitRGBBitmap(area->x1, area->y1, (uint16_t *)&pixels->full, w, h);
+  gfx->draw16bitRGBBitmap(ox, oy, (uint16_t *)&out->full, ow, oh);
 #endif
   g_flushUs += micros() - t0;
   g_flushPx += w * h;
@@ -166,8 +231,27 @@ static void lvglTouchRead(lv_indev_drv_t *drv, lv_indev_data_t *data) {
 #endif
   wasDown = pressed;
 
-  data->point.x = lastX;
-  data->point.y = lastY;
+  // Panel coordinates into rotated screen coordinates. LVGL rotates what it
+  // draws; it does not rotate what the touch driver reports, so this has to
+  // match by hand.
+  //
+  // The panel is square, so no resolution swap is needed. Rotating the image
+  // 90 degrees clockwise puts the logical origin at the panel's top-right:
+  // logical x runs down the panel, logical y runs back along it.
+  int16_t tx = lastX, ty = lastY;
+#if SCREEN_ROTATION == 90
+  data->point.x = ty;
+  data->point.y = (LCD_WIDTH - 1) - tx;
+#elif SCREEN_ROTATION == 180
+  data->point.x = (LCD_WIDTH - 1) - tx;
+  data->point.y = (LCD_HEIGHT - 1) - ty;
+#elif SCREEN_ROTATION == 270
+  data->point.x = (LCD_HEIGHT - 1) - ty;
+  data->point.y = tx;
+#else
+  data->point.x = tx;
+  data->point.y = ty;
+#endif
   data->state = pressed ? LV_INDEV_STATE_PRESSED : LV_INDEV_STATE_RELEASED;
 }
 
@@ -339,7 +423,18 @@ void setup() {
   // examples use a quarter, but they are not also running WiFi and an HTTP
   // server; two quarter-screen buffers would take ~217 KB of the 512 KB and
   // leave the network stack short.
-  size_t bufPx = (size_t)LCD_WIDTH * LCD_HEIGHT / 10;
+  // A sixteenth of the screen per buffer, not a tenth, because rotation needs
+  // a third buffer of the same size for the transpose.
+  //
+  //   2 x 1/10 = 87 KB   (no rotation, the long-standing baseline)
+  //   3 x 1/10 = 130 KB  (rotation - and WiFi then fails to init with
+  //                       ESP_ERR_NO_MEM, because this is DMA-capable
+  //                       internal RAM and the radio needs its share)
+  //   3 x 1/16 = 81 KB   (rotation, and still under the baseline)
+  //
+  // Smaller buffers mean more flush calls, each one cheaper. The total is what
+  // the radio cares about.
+  size_t bufPx = (size_t)LCD_WIDTH * LCD_HEIGHT / 16;
   lv_color_t *buf1 = (lv_color_t *)heap_caps_malloc(
       bufPx * sizeof(lv_color_t), MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
   lv_color_t *buf2 = (lv_color_t *)heap_caps_malloc(
@@ -356,6 +451,24 @@ void setup() {
   dispDrv.flush_cb = lvglFlush;
   dispDrv.rounder_cb = lvglRounder;
   dispDrv.draw_buf = &drawBuf;
+  // Software rotation, because the panel cannot do it. Arduino_CO5300's
+  // setRotation only emits MADCTL X/Y flips - no row/column exchange - so
+  // rotation 1 mirrors the image rather than turning it. LVGL transposes each
+  // flushed area into a scratch buffer instead: correct for text and layout
+  // alike, at the cost of a copy per flush.
+  //
+  // Touch is rotated to match in lvglTouchRead(). Both read SCREEN_ROTATION,
+  // so they cannot drift apart - a display and a touch layer disagreeing about
+  // which way is up is precisely the bug that cost a day here before.
+#if SCREEN_ROTATION != 0
+  // Not dispDrv.sw_rotate - see the note in lvglFlush(). LVGL's chunked
+  // rotation breaks the panel's even-column requirement; ours does not.
+  rotBuf = (lv_color_t *)heap_caps_malloc(bufPx * sizeof(lv_color_t),
+                                          MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+  if (!rotBuf) {
+    Serial.println("rotate: scratch buffer failed - display will be UNROTATED");
+  }
+#endif
   lv_disp_drv_register(&dispDrv);
 
   static lv_indev_drv_t indevDrv;

@@ -317,10 +317,27 @@ whole ring near 150 mA at pulse peak. Raise it only with a dedicated 5 V supply
 whose ground is tied to the board's.
 
 **Aligning the arcs.** `RING_ZERO_DEG` in `ui.h` is the angle of LED 0, in LVGL
-degrees (0 = 3 o'clock, clockwise). It is **90**, putting LED 0 at 6 o'clock —
-the wire entry on this ring. `POST /ringzero` marks LED 0 with a direction
-trail; set this once after mounting so a session's arc on screen points at its
-arc on the ring.
+degrees (0 = 3 o'clock, clockwise). It is **350** on this build, and it absorbs
+three things at once: where LED 0 sits on the ring, how the ring is seated in
+the enclosure, and `SCREEN_ROTATION` — the display is rotated in software and
+the ring is not, so rotating the screen moves the arcs off the LEDs they point
+at.
+
+Tune it live rather than by rebuilding:
+
+```bash
+./stage-demo.sh                                            # four arcs to aim at
+curl -sX POST "http://192.168.1.200/ringalign?deg=350"     # takes effect next frame
+./stage-demo.sh --clear
+```
+
+**Stage the sessions first.** With a single session its arc spans the whole
+circle, which looks identical at every angle — there is nothing to align
+against, and the knob appears broken. `POST /ringzero` marks LED 0 with a
+direction trail if you would rather work from that end.
+
+If no angle lines up and the colours run in *opposite* directions around the
+two circles, it is mirrored rather than rotated: flip `RING_CLOCKWISE`.
 
 ## Setup
 

@@ -124,9 +124,26 @@ static inline lv_color_t colourOf(SessionState s) {
 }
 
 // LED index -> LVGL degrees, wrapped into [0, 360).
+// Runtime, not the compile-time constant, so the alignment can be tuned live
+// with POST /ringalign?deg=NNN while watching the gate. Finding it by
+// edit-compile-flash is a ninety-second loop per guess, and the answer is
+// read by eye - exactly the case for a knob rather than a rebuild.
+//
+// SCREEN_ROTATION is baked into whatever value lands here: the screen's idea
+// of "up" is rotated in software and the ring's is not, so this absorbs both
+// the physical mounting and the display rotation at once.
+static int16_t g_zeroDeg = RING_ZERO_DEG;
+
+void uiSetZeroDeg(int16_t deg) {
+  while (deg < 0) deg += 360;
+  g_zeroDeg = deg % 360;
+}
+
+int16_t uiZeroDeg() { return g_zeroDeg; }
+
 static uint16_t ledToDeg(float led) {
   float step = led * 360.0f / (float)g_leds;
-  float d = RING_ZERO_DEG + (RING_CLOCKWISE ? step : -step);
+  float d = g_zeroDeg + (RING_CLOCKWISE ? step : -step);
   while (d < 0) d += 360.0f;
   while (d >= 360.0f) d -= 360.0f;
   return (uint16_t)(d + 0.5f);
